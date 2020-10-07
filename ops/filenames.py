@@ -11,7 +11,7 @@ FILE_PATTERN = [
         r'((?P<home>.*)\/)?',
         r'(?P<dataset>(?P<date>[0-9]{8}).*?)\/',
         r'(?:(?P<subdir>.*)\/)*',
-        r'(MAX_)?(?P<mag>[0-9]+X).',
+        r'(MAX_)?(?P<mag>[0-9]+[xX]).',
         r'(?:(?P<cycle>[^_\.]*).*?(?:.*MMStack)?.)?',
         r'(?P<well>[A-H][0-9]*)',
         r'(?:[_-]Site[_-](?P<site>([0-9]+)))?',
@@ -25,11 +25,41 @@ FOLDER_PATTERN = [
         r'(?:[_-]Site[_-](?P<site>([0-9]+)))?',
         r'\/?']
 
+ND2_FILE_PATTERN = [
+        r'((?P<home>.*)\/)?',
+        r'(?P<dataset>(?P<date>[0-9]{8}).*?)\/',
+        r'(?:(?P<expt>.*)\/)',
+        r'(?:(?P<plate>.*)\/)',
+        r'(MAX_)?(?P<mag>[0-9]+x).',
+        r'(?:(?P<cycle>[^_\.]*)\/)',
+        r'(?:Well(?P<well>[A-H][0-9]*))?',
+        r'(?:_Channel(?P<channel>.*)\_.*)?',
+        r'(?:\.(?P<tag>.*))*\.(?P<ext>.*)']
+
+TIF_FILE_PATTERN = [
+        r'((?P<home>.*)\/)?',
+        r'(?P<dataset>(?P<date>[0-9]{8}).*?)\/',
+        r'(?:(?P<expt>.*)\/)',
+        r'(?:(?P<plate>.*)\/)',
+        r'(MAX_)?(?P<mag>[0-9]+x).',
+        r'(?:(?P<cycle>[^_\.]*))?',
+        r'(?:.*?(?P<well>[A-H][0-9]*))?',
+        r'(?:[_-]Site[_-](?P<site>([0-9]+)))?',
+        r'(?:_Channel-(?P<channel>)\.)?',
+        r'(?:\.(?P<tag>.*))*\.(?P<ext>.*)']
+
+
 FILE_PATTERN_ABS = ''.join(FILE_PATTERN)
 FILE_PATTERN_REL = ''.join(FILE_PATTERN[2:])
 
 FOLDER_PATTERN_ABS = ''.join(FILE_PATTERN[:2] + FOLDER_PATTERN)
 FOLDER_PATTERN_REL = ''.join(FOLDER_PATTERN)
+
+ND2_FILE_PATTERN_ABS = ''.join(ND2_FILE_PATTERN)
+ND2_FILE_PATTERN_REL = ''.join(ND2_FILE_PATTERN[2:])
+
+TIF_FILE_PATTERN_ABS = ''.join(TIF_FILE_PATTERN)
+TIF_FILE_PATTERN_REL = ''.join(TIF_FILE_PATTERN[2:])
 
 
 def parse_filename(filename, custom_patterns=None):
@@ -49,12 +79,14 @@ def parse_filename(filename, custom_patterns=None):
          'ext': 'tif',
          'file': 'example_data/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-107.max.tif'}
     """
-    filename = normpath(filename)
+    filename = os.path.normpath(filename)
     # windows
     filename = filename.replace('\\', '/')
 
     patterns = [FILE_PATTERN_ABS, FILE_PATTERN_REL, 
-                FOLDER_PATTERN_ABS, FOLDER_PATTERN_REL]
+                FOLDER_PATTERN_ABS, FOLDER_PATTERN_REL,
+                ND2_FILE_PATTERN_ABS, ND2_FILE_PATTERN_REL,
+                TIF_FILE_PATTERN_ABS, TIF_FILE_PATTERN_REL]
 
     if custom_patterns is not None:
         patterns += list(custom_patterns)
@@ -63,7 +95,8 @@ def parse_filename(filename, custom_patterns=None):
         match = re.match(pattern, filename)
         try:
             result = {k:v for k,v in match.groupdict().items() if v is not None}
-            result[FILE] = filename  # convenience, not used by name_file
+            # result[FILE] = filename  # convenience, not used by name_file
+            result['file'] = filename
             return result
         except AttributeError:
             continue
@@ -92,12 +125,20 @@ def name_file(description, **more_description):
         d['pos'] = 'Tile-{0}'.format(d['tile'])
     elif 'site' in d:
         d['pos'] = 'Site-{0}'.format(d['site'])
-    else:
-        d['pos'] = None
+    # else:
+    #     d['pos'] = None
+
+    # for fast-mode acquisition nd2 files with separated channels
+    if 'channel' in d:
+        d['ch'] = 'Channel-{0}'.format(d['channel'])
 
     formats = [
+        '{first}_{pos}_{ch}.{tag}.{ext}',
+        '{first}_{pos}_{ch}.{ext}',
         '{first}_{pos}.{tag}.{ext}',
         '{first}_{pos}.{ext}',
+        '{first}_{ch}.{tag}.{ext}',
+        '{first}_{ch}.{ext}',
         '{first}.{tag}.{ext}',
         '{first}.{ext}',
     ]
@@ -113,7 +154,7 @@ def name_file(description, **more_description):
     
     optional = lambda x: d.get(x, '')
     filename = os.path.join(optional('home'), optional('dataset'), optional('subdir'), basename)
-    return normpath(filename)
+    return os.path.normpath(filename)
 
 
 def normpath(filename):

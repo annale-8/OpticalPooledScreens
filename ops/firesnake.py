@@ -10,12 +10,18 @@ warnings.filterwarnings('ignore', message='precision loss when converting')
 
 import numpy as np
 import pandas as pd
+import scipy
+import matplotlib
+# matplotlib.use('TkAgg') #uncomment when running snakemake
+from nd2reader import ND2Reader
 import skimage
 import ops.features
 import ops.process
 import ops.io
 import ops.in_situ
 from ops.process import Align
+import ops.filenames
+import ops.nd2_to_tif
 
 
 class Snake():
@@ -24,6 +30,98 @@ class Snake():
     provided instead of image and table data). The snakemake methods (no underscore)
     are automatically loaded by `Snake.load_methods`.
     """
+
+    @staticmethod
+    def _nd2_to_tif(input_filename,meta=True):
+        """
+        Convert nd2 to tif files
+        """
+        # add parse_filename function to get info from nd2 name and convert to tif filename
+        info = ops.filenames.parse_filename(input_filename)
+        
+        file_description={}
+        for k,v in sorted(info.items()):
+            file_description[k] = v
+        file_description['ext']='tif'
+        file_description['subdir']=file_description['expt']+'_tif/'+file_description['mag']+'_'+file_description['cycle']
+
+
+        with ND2Reader(input_filename) as images:
+            images.iter_axes='v'
+            axes = 'xy'
+            if 'c' in images.axes:
+                axes = 'c' + axes
+            if 'z' in images.axes:
+                axes = 'z' + axes
+            images.bundle_axes = axes
+
+            if 'z' in images.axes:
+                for site,image in zip(images.metadata['fields_of_view'],images):
+                    image = image.max(axis=0)
+
+                    output_filename = ops.filenames.name_file(file_description,site=str(site)) 
+                    save(output_filename,image[:])
+            else:
+                for site,image in zip(images.metadata['fields_of_view'],images):
+                    output_filename = ops.filenames.name_file(file_description,site=str(site)) 
+                    save(output_filename,image[:])
+                                 
+            # METADATA EXTRACTION
+            if meta==True:
+                well_metadata = [{
+                                    'filename':ops.filenames.name_file(file_description,site=str(site)),
+                                    'field_of_view':site,
+                                    'x':images.metadata['x_data'][site],
+                                    'y':images.metadata['y_data'][site],
+                                    'z':images.metadata['z_data'][site],
+                                    'pfs_offset':images.metadata['pfs_offset'][0],
+                                    'pixel_size':images.metadata['pixel_microns']
+                                } for site in images.metadata['fields_of_view']]
+                metadata_filename = ops.filenames.name_file(file_description,tag='metadata',ext='pkl')
+                pd.DataFrame(well_metadata).to_pickle(metadata_filename)
+
+    @staticmethod
+    def _max_project_zstack(stack,slices=3):
+        """
+        Condense z-stack into a single slice using a simple maximum project through 
+        all slices for each channel individually. If slices is a list, then specifies the number 
+        of slices for each channel.
+        """
+        if isinstance(slices,list):
+            channels = len(slices)
+            maxed = []
+            end_ch_slice = 0
+            for ch in range(len(slices)):
+                end_ch_slice += slices[ch]
+                ch_slices = stack[(end_ch_slice-slices[ch]):(end_ch_slice)]
+                ch_maxed = np.amax(ch_slices,axis=0)
+                maxed.append(ch_maxed)
+        else:
+            channels = int(stack.shape[-3]/slices)
+            assert len(stack) == int(slices)*channels, 'Input data must have leading dimension length slices*channels'
+            maxed = []
+            for ch in range(channels):
+                ch_slices = stack[(ch*slices):((ch+1)*slices)]
+                ch_maxed = np.amax(ch_slices,axis=0)
+                maxed.append(ch_maxed)
+        maxed = np.array(maxed)
+
+        return maxed 
+
+    @staticmethod
+    def _merge_csv(csv_files):
+        """Reads .csv files, concatenates them into a pandas df, and saves as merged .h5 file
+        """
+        df = pd.DataFrame([])
+        for f in csv_files:
+            try:
+                df_file = pd.read_csv(f)
+                df = df.append(df_file)
+            except:
+                continue
+
+        return df
+
 
     @staticmethod
     def _align_SBS(data, method='DAPI', upsample_factor=2, window=2, cutoff=1,
@@ -46,10 +144,10 @@ class Snake():
         aligned = data.copy()
         if align_within_cycle:
             align_it = lambda x: Align.align_within_cycle(x, window=window, upsample_factor=upsample_factor)
-            # if data.shape[1] == 4:
-            #     n = 0
-            #     align_it = lambda x: Align.align_within_cycle(x, window=window, 
-            #         upsample_factor=upsample_factor, cutoff=cutoff)
+            if data.shape[1] == 4:
+                n = 0
+                align_it = lambda x: Align.align_within_cycle(x, window=window, 
+                    upsample_factor=upsample_factor)
             # else:
             #     n = 1
             
@@ -82,7 +180,112 @@ class Snake():
         offsets = [offset] * len(data_2)
         aligned = ops.process.Align.apply_offsets(data_2, offsets)
         return aligned
+    
+    @staticmethod
+    def _align_phenotype_channels(files,target,source,riders=[],upsample_factor=2, window=2, remove=False):
+        """
+        For fast-mode imaging: merge separate channel tifs into one stack
+        Expects files to be a list of strings of filenames
+        Merged data will be in the order of (CYCLE, CHANNEL, I, J)
         
+        Target = int 
+            Channel index to which source channels are aligned to
+        Source = int or list of integers
+            Channel with similar pattern to target used to calculate offsets for alignment
+            If list, calculate offsets for each channel to target separately 
+            10/1/20 NOTE: current code does not accomodate for riders if multiple sources listed
+        Riders - list of integers
+            Channels to be aligned to target using offset calculate from source
+        """
+        
+        data = np.array(files)
+
+        # in the case that data has shape (CYCLE, CHANNEL, I, J):
+        if data.ndim == 4:
+            data = data[0]
+
+        if not isinstance(source,list):
+            windowed = Align.apply_window(data[[target,source]],window)
+            # remove noise?
+            offsets = Align.calculate_offsets(windowed,upsample_factor=upsample_factor)
+            
+            if not isinstance(riders,list):
+                riders = [riders]
+            
+            full_offsets = np.zeros((data.shape[0],2))
+            full_offsets[[source]+riders] = offsets[1]
+            aligned = Align.apply_offsets(data, full_offsets)
+        else:
+            full_offsets = np.zeros((data.shape[0],2))
+            for src in source:
+                windowed = Align.apply_window(data[[target,src]],window)
+                offsets = Align.calculate_offsets(windowed,upsample_factor=upsample_factor)
+                full_offsets[[src]] = offsets[1]
+            aligned = Align.apply_offsets(data, full_offsets)
+
+        if remove == 'target':
+            channel_order = list(range(data.shape[0]))
+            channel_order.remove(source)
+            channel_order.insert(target+1,source)
+            aligned = aligned[channel_order]
+            aligned = remove_channels(aligned, target)
+        elif remove == 'source':
+            aligned = remove_channels(aligned, source)
+
+        return aligned
+
+    @staticmethod
+    def _merge_SBS(data, upsample_factor=2, window=2, cutoff=1,
+        align_within_cycle=True, keep_trailing=False, n=1, c1=False):
+        """
+        Fast-mode SBS: merge and align based on modified align_SBS (method=SBS_mean)
+        Slow-mode SBS:
+            Remove DAPI channel
+            Based on remove_channels: 
+                Remove channel or list of channels from array of shape (..., CHANNELS, I, J).
+        """
+        
+        data = np.array(data)
+        if keep_trailing:
+            valid_channels = min([len(x) for x in data])
+            data = np.array([x[-valid_channels:] for x in data])
+        
+
+        # for fast-mode SBS, all channels merged into one array with dimensions CHANNEL, I, J 
+        if not c1: 
+            aligned = np.expand_dims(data, axis=0)
+            assert aligned.ndim == 4, 'Input data must have dimensions CYCLE, CHANNEL, I, J'
+
+            # align between SBS channels for each cycle
+            if align_within_cycle:
+                align_it = lambda x: Align.align_within_cycle(x, window=window, upsample_factor=upsample_factor)
+                if aligned.shape[1] == 4:
+                    n = 0
+                    align_it = lambda x: Align.align_within_cycle(x, window=window, 
+                        upsample_factor=upsample_factor)
+                # else:
+                #     n = 1
+                aligned[:, n:] = np.array([align_it(x) for x in aligned[:, n:]])
+            
+            # calculate cycle offsets using the average of SBS channels
+            target = Align.apply_window(aligned[:, :], window=window).max(axis=1)
+            normed = Align.normalize_by_percentile(target)
+            normed[normed > cutoff] = cutoff
+            offsets = Align.calculate_offsets(normed, upsample_factor=upsample_factor)
+            # apply cycle offsets to each channel
+            for channel in range(aligned.shape[1]):
+                aligned[:, channel] = Align.apply_offsets(aligned[:, channel], offsets)
+
+        # for slow-mode SBS, remove CYCLE dimension and DAPI channel -> array with dimensions CHANNEL, I, J
+
+        if c1:
+            assert data.ndim == 4, 'Input data must have dimensions CYCLE, CHANNEL, I, J'
+            remove_index = 0 # DAPI channel
+            aligned = remove_channels(data, remove_index)
+
+        return aligned[0]
+
+
     @staticmethod
     def _segment_nuclei(data, threshold, area_min, area_max):
         """Find nuclei from DAPI. Find cell foreground from aligned but unfiltered 
@@ -90,11 +293,11 @@ class Snake():
         """
 
         if isinstance(data, list):
-            dapi = data[0]
+            dapi = data[0].astype(np.uint16) #[0] indicated DAPI channel #
         elif data.ndim == 3:
-            dapi = data[0]
+            dapi = data[0].astype(np.uint16)
         else:
-            dapi = data
+            dapi = data.astype(np.uint16)
 
         kwargs = dict(threshold=lambda x: threshold, 
             area_min=area_min, area_max=area_max)
@@ -103,6 +306,33 @@ class Snake():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             nuclei = ops.process.find_nuclei(dapi, **kwargs)
+        return nuclei.astype(np.uint16)
+
+    @staticmethod
+    def _segment_nuclei_channel(data, threshold, channel, radius, area_min, area_max):
+        """Find nuclei/puncta from DAPI/specified channel. 
+        Find cell foreground from aligned but unfiltered data. 
+        Expects data to have shape (CHANNEL, I, J)
+        """
+        data = np.array(data)
+        if data.ndim == 4:
+            data = data[0]
+
+        if isinstance(data, list):
+            dapi = data[int(channel)].astype(np.uint16) 
+        elif data.ndim == 3:
+            dapi = data[int(channel)].astype(np.uint16) 
+        else:
+            dapi = data.astype(np.uint16)
+
+        kwargs = dict(threshold=lambda x: threshold, 
+            radius=radius, area_min=area_min, area_max=area_max)
+
+        # skimage precision warning
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            nuclei = ops.process.find_nuclei(dapi, **kwargs)
+
         return nuclei.astype(np.uint16)
 
     @staticmethod
@@ -137,6 +367,7 @@ class Snake():
             raise ValueError
 
         mask = mask > threshold
+
         try:
             # skimage precision warning
             with warnings.catch_warnings():
@@ -147,6 +378,182 @@ class Snake():
             cells = nuclei
 
         return cells
+
+    @staticmethod
+    def _segment_cells_GFP(data, nuclei, threshold, channel, filter_nuclei=True):
+        """Segment cells from phenotyping data. Matches cell labels to nuclei labels.
+        Note that labels can be skipped, for example if cells are touching the 
+        image boundary.
+        Expects data to be in the order of (CYCLE, CHANNEL, I, J)
+        """
+
+        if data.ndim == 4:
+            mask = data[0][int(channel)]
+        elif data.ndim == 3:
+            mask = data[int(channel)]
+        elif data.ndim == 2:
+            mask = data
+        else:
+            raise ValueError
+
+        mask = mask > threshold
+        filled = scipy.ndimage.binary_fill_holes(mask)
+
+        # if filter_nuclei:
+        #         # remove nuclei from nuclei mask that do not pass GFP threshold
+        #     filtered_nuclei = np.multiply(nuclei,mask)
+
+        try:
+            # skimage precision warning
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # cells = ops.process.find_cells_GFP(filtered_nuclei, mask, **kwargs)
+                cells = ops.process.find_cells(nuclei, filled)
+        except ValueError:
+            print('segment_cells error -- no cells')
+            cells = nuclei
+
+        return cells
+
+
+    @staticmethod
+    def _segment_cells_HEK(data, cells, threshold, area_min, channel, filter_nuclei=True):
+        """
+        Filters all segmented cells by area (~min nuclear area) and GFP signal to determine mask of
+        HEK cells only. 
+        Expects data to have shape (CYCLE, CHANNEL, I, J)
+        """
+        
+        kwargs = dict(threshold=lambda x: threshold, area_min=area_min)
+
+        if data.ndim == 4:
+            mask = data[0][int(channel)]
+        elif data.ndim == 3:
+            mask = data[int(channel)]
+        elif data.ndim == 2:
+            mask = data
+        else:
+            raise ValueError
+
+        mask = mask > threshold
+        filled = scipy.ndimage.binary_fill_holes(mask)
+
+        filtered_cells  = np.multiply(filled, cells)
+
+        HEK_cells = ops.process.filter_by_region(filtered_cells, lambda r: area_min < r.area, threshold, relabel=False)
+
+        return HEK_cells.astype(np.uint16)
+
+    @staticmethod
+    def _segment_HEKs(data, nuclei, channel, threshold, area_min):
+        """Combines segment_cells_GFP and segment_cells_HEK
+        Segment cells from phenotyping data. Matches cell labels to nuclei labels.
+        Note that labels can be skipped, for example if cells are touching the 
+        image boundary.
+        Filters all segmented cells by area (~min nuclear area) and GFP signal to determine mask of
+        HEK cells only. 
+        Expects data to have shape (CYCLE, CHANNEL, I, J)
+        """
+        
+        if data.ndim == 4:
+            mask = data[0][int(channel)] # channel index for cell background (e.g. GFP)
+        elif data.ndim == 3:
+            mask = data[int(channel)]
+        elif data.ndim == 2:
+            mask = data
+        else:
+            raise ValueError
+
+        # cell_threshold and HEK_nuclei_area_min
+        kwargs = dict(threshold=lambda x: threshold, area_min=area_min)
+
+        mask = mask > threshold
+        filled = scipy.ndimage.binary_fill_holes(mask)
+
+        try:
+            # skimage precision warning
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # cells = ops.process.find_cells_GFP(filtered_nuclei, mask, **kwargs)
+                cells = ops.process.find_cells(nuclei, filled)
+        except ValueError:
+            print('segment_cells error -- no cells')
+            cells = nuclei
+
+        HEKs = ops.process.filter_by_region(cells, lambda r: area_min < r.area, threshold, relabel=False)
+
+        return HEKs.astype(np.uint16)
+
+    @staticmethod
+    def _filter_cell_clumps(data, cells, wildcards, distance_threshold=10):
+        """Filter cell mask to remove all cells within distance d of each other, from centroid (i,j).
+        For each cell, find all cells within given bounds, 
+        calculate Euclidean distance between them, and eliminate clumped cells
+        """
+        if np.all(cells==0):
+            return np.zeros((1480,1480))
+
+        df = (Snake._extract_features(cells, cells, wildcards))
+        # add column for [x,y] positions
+        df['ij'] = df[['i','j']].values.tolist()
+        ij = df['ij'].values.tolist()
+
+        # calculate matrix of Euclidean distance between all cells in FOV
+        distance = scipy.spatial.distance.cdist(ij, ij, 'euclidean')
+        min_dist = np.where(distance>0, distance,distance.max()).min(1)
+        # cells (labels) that pass distance threshold from nearest neighbor
+        try:
+            min_idx = np.hstack(np.argwhere(min_dist > distance_threshold))
+            label = df.iloc[min_idx]
+            mask = np.isin(cells, np.array(label['label'].values.tolist()))
+            filtered_cells = np.multiply(mask.astype(int),cells)
+        except:
+            filtered_cells = np.zeros((1480,1480))
+
+        return filtered_cells
+
+
+    @staticmethod
+    def _segment_cell_edges(cells, thickness=4):
+        """
+        Find edges of HEK cells only
+        """
+        cells = np.array(cells, dtype=np.uint16)
+
+        boundaries = skimage.segmentation.find_boundaries(cells, connectivity=2, mode='inner').astype(np.uint16)
+        expanded = scipy.ndimage.binary_dilation(boundaries, iterations=thickness).astype(np.uint16)
+
+        # keep same label as cell
+        edges = np.multiply(cells, expanded)
+
+        return edges
+
+
+    @staticmethod
+    def _segment_puncta(data, threshold, channel, radius, area_min, area_max):
+        """Find synaptic marker puncta from phenotyping channel.
+        Expects log-filtered data to have shape (CYCLE, CHANNEL, I, J)
+        """
+        data = np.array(data)
+        if data.ndim == 4:
+            data = data[0]
+
+        if isinstance(data, list):
+            marker = data[int(channel)].astype(np.uint16) 
+        elif data.ndim == 3:
+            marker = data[int(channel)].astype(np.uint16) 
+        else:
+            marker = data.astype(np.uint16)
+
+        kwargs = dict(threshold=lambda x: threshold, 
+            radius=radius, area_min=area_min, area_max=area_max)
+
+        # skimage precision warning
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            puncta = ops.process.find_puncta(marker, **kwargs)
+
+        return puncta.astype(np.uint16)
 
     @staticmethod
     def _transform_log(data, sigma=1, skip_index=None):
@@ -167,8 +574,9 @@ class Snake():
             data = remove_channels(data, remove_index)
 
         leading_dims = tuple(range(0, data.ndim - 2))
-        # consensus = np.std(data, axis=leading_dims)
-        consensus = np.std(data, axis=0).mean(axis=0)
+        consensus = np.std(data, axis=leading_dims) # this is for 1-cycle data
+        # consensus = np.std(data, axis=0).mean(axis=0) # this is for multi-cycle data
+
 
         return consensus
     
@@ -263,6 +671,35 @@ class Snake():
         return df_reads
 
     @staticmethod
+    def _call_reads_percentiles(df_bases, peaks=None, correction_only_in_cells=True, imaging_order='GTAC'):
+        # print(imaging_order)
+        """Median correction performed independently for each tile.
+        Use the `correction_only_in_cells` flag to specify if correction
+        is based on reads within cells, or all reads.
+        """
+        if df_bases is None:
+            return
+        if correction_only_in_cells:
+            if len(df_bases.query('cell > 0')) == 0:
+                return
+
+
+        cycles = len(set(df_bases['cycle']))
+        channels = len(set(df_bases['channel']))
+
+        df_reads = (df_bases
+            .pipe(ops.in_situ.clean_up_bases)
+            .pipe(ops.in_situ.do_percentile_call, cycles=cycles, channels=channels, 
+                correction_only_in_cells=correction_only_in_cells)
+            )
+
+        if peaks is not None:
+            i, j = df_reads[['i', 'j']].values.T
+            df_reads['peak'] = peaks[i, j]
+
+        return df_reads
+
+    @staticmethod
     def _call_cells(df_reads, q_min=0):
         """Median correction performed independently for each tile.
         """
@@ -289,6 +726,73 @@ class Snake():
             df[k] = v
         
         return df
+
+    @staticmethod
+    def _extract_phenotype_synapse_puncta(data_phenotype, puncta, cells, edges, wildcards):
+        """Expects data_phenotype to have shape (CYCLE, CHANNEL, I, J)"""
+
+        if puncta.max() == 0:
+            return
+        if np.all(cells==0):
+            return
+        if data_phenotype.ndim == 4:
+            data_phenotype = data_phenotype[0]
+        
+        import ops.features
+
+        # add cell labels corresponding to each punctae
+        cell_label = ops.process.assign_cells_puncta(cells, puncta)[1]
+        edge_label = ops.process.assign_cells_puncta(edges, puncta)[1]
+
+        features_p = ops.features.features_synapse_puncta
+        features_p = {k + '_puncta': v for k,v in features_p.items()}
+
+        df_p = (Snake._extract_features(data_phenotype, puncta, wildcards, features_p)
+            .rename(columns={'area': 'area_puncta'}))
+      
+        df_p = df_p.rename_axis('punctae').join(pd.Series(cell_label, name='cell'), on='punctae').join(pd.Series(edge_label, name='edge'), on='punctae')
+        df_p = df_p[df_p.cell != 0]
+        
+        return df_p
+
+    @staticmethod
+    def _extract_phenotype_synapse_cell(data_phenotype, cells, edges, wildcards):
+        """Expects data_phenotype to have shape (CYCLE, CHANNEL, I, J)"""
+
+        if cells.max() == 0:
+            return
+        if data_phenotype.ndim == 4:
+            data_phenotype = data_phenotype[0]
+
+        import ops.features
+
+        features_c = ops.features.features_synapse_cell
+        features_e = ops.features.features_synapse_edge
+
+        features_c = {k + '_cell': v for k,v in features_c.items()}
+        features_e = {k + '_edge': v for k,v in features_e.items()}
+        
+
+        df_c =  (Snake._extract_features(data_phenotype, cells, wildcards, features_c)
+            .rename(columns={'area': 'area_cell'}))
+        df_e = (Snake._extract_features(data_phenotype, edges, wildcards, features_e)
+            .drop(['i', 'j'], axis=1).rename(columns={'area': 'area_edge'}))
+
+        # inner join discards edges without corresponding cells
+        df = (pd.concat([df_c.set_index('label'), df_e.set_index('label')], axis=1, join='inner')
+                .reset_index())
+
+
+        # add column for [x,y] positions
+        df['ij'] = df[['i','j']].values.tolist()
+        ij = df['ij'].values.tolist()
+
+        # calculate matrix of Euclidean distance between all cells in FOV
+        distance = scipy.spatial.distance.cdist(ij, ij, 'euclidean')
+        min_dist = np.where(distance>0, distance,distance.max()).min(1)
+        df['min_dist'] = min_dist
+
+        return (df.rename(columns={'label': 'cell'}))
 
     @staticmethod
     def _extract_phenotype_FR(data_phenotype, nuclei, wildcards):
@@ -476,6 +980,14 @@ def remove_channels(data, remove_index):
     channels_mask = np.ones(data.shape[-3], dtype=bool)
     channels_mask[remove_index] = False
     data = data[..., channels_mask, :, :]
+    return data
+
+
+def saturated_comp(data, threshold):
+    """Clip the max intensity to lower intensity of saturated pixels."""
+
+    data[data > threshold] = threshold
+
     return data
 
 

@@ -24,6 +24,7 @@ BLUE    = ZERO + ZERO + ramp
 MAGENTA = ramp + ZERO + ramp
 GRAY    = ramp + ramp + ramp
 CYAN    = ZERO + ramp + ramp
+YELLOW  = ramp + ramp + ZERO
 
 DEFAULT_LUTS = GRAY, GREEN, RED, MAGENTA, CYAN, GRAY, GRAY
 
@@ -136,7 +137,7 @@ def save_stack(name, data, luts=None, display_ranges=None,
     resolution = (1./resolution,)*2
 
     if not os.path.isdir(os.path.dirname(name)):
-        os.makedirs(os.path.dirname(name))
+        os.makedirs(os.path.dirname(name), exist_ok=True)
 
     if data.ndim == 2:
         # simple description

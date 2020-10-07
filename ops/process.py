@@ -78,6 +78,45 @@ def find_cells(nuclei, mask, remove_boundary_cells=True):
     return cells.astype(np.uint16)
 
 
+def find_puncta(channel, threshold, radius=3, area_min=0.5, area_max=100,
+                score=lambda r: r.mean_intensity,
+                smooth=1.35):
+    """
+    Finds synaptic puncta in a given channel.
+    As of 10/3/20, same function as find_nuclei
+    """
+
+    mask = binarize(channel, radius, area_min)
+    labeled = skimage.measure.label(mask)
+    labeled = filter_by_region(labeled, score, threshold, intensity_image=channel) > 0
+
+    # only fill holes below minimum area
+    filled = ndimage.binary_fill_holes(labeled)
+    difference = skimage.measure.label(filled!=labeled)
+
+    change = filter_by_region(difference, lambda r: r.area < area_min, 0) > 0
+    labeled[change] = filled[change]
+
+    puncta = apply_watershed(labeled, smooth=smooth)
+
+    result = filter_by_region(puncta, lambda r: area_min < r.area < area_max, threshold)
+
+    return result
+
+
+def assign_cells_puncta(cells, puncta):
+    """Assigns cell label to each puncta (label) based on most frequent cell assignment."""
+
+    # consider only puncta where cell > 0
+    cell_mask = np.clip(cells, 0, 1)
+    overlap = np.multiply(cell_mask,puncta)
+
+    cell_label = np.zeros(((np.max(puncta)+1),), dtype=int)
+    for i in np.unique(overlap):
+        cell_label[i] = scipy.stats.mode(cells[np.where(puncta == i)])[0][0]
+    
+    return overlap.astype(np.uint16), cell_label
+
 def find_peaks(data, n=5):
     """Finds local maxima. At a maximum, the value is max - min in a 
     neighborhood of width `n`. Elsewhere it is zero.
@@ -163,6 +202,8 @@ class Align:
             else:
                 offset, _, _ = skimage.feature.register_translation(
                                 src, target, upsample_factor=upsample_factor)
+                # offset, _, _ = skimage.registration.phase_cross_correlation(
+                #                 src, target, upsample_factor=upsample_factor)
                 offsets += [offset]
         return np.array(offsets)
 
@@ -208,6 +249,28 @@ class Align:
         	return aligned
 
     @staticmethod
+    def align_between_pheno_channels(data, channel_index=4, offset_channel=[3,5], upsample_factor=1, window=2,
+            return_offsets=False):
+        """ Expects `data` to be a list with dimensions (CHANNEL, I, J) """
+        # offsets from target channel
+        target = Align.apply_window(data[:, channel_index], window)
+        offsets = Align.calculate_offsets(target, upsample_factor=upsample_factor)
+
+        # apply to all channels
+        warped = []
+        for index, data_ in enumerate(data.transpose([1, 0, 2, 3])):
+            if index in offset_channel:
+                warped += [Align.apply_offsets(data_, offsets)]
+            else:
+                warped += [data_]
+
+        aligned = np.array(warped).transpose([1, 0, 2, 3])
+        if return_offsets:
+            return aligned, offsets
+        else:
+            return aligned
+
+    @staticmethod
     def apply_window(data, window):
         height, width = data.shape[-2:]
         find_border = lambda x: int((x/2.) * (1 - 1/float(window)))
@@ -216,13 +279,12 @@ class Align:
 
 
 # SEGMENT
-def find_nuclei(dapi, threshold, radius=15, area_min=50, area_max=500,
+def find_nuclei(dapi, threshold, radius=15, area_min=50, area_max=500, method='mean',
                 score=lambda r: r.mean_intensity,
                 smooth=1.35):
     """
     """
-
-    mask = binarize(dapi, radius, area_min)
+    mask = binarize(dapi, radius, area_min, method)
     labeled = skimage.measure.label(mask)
     labeled = filter_by_region(labeled, score, threshold, intensity_image=dapi) > 0
 
@@ -238,19 +300,31 @@ def find_nuclei(dapi, threshold, radius=15, area_min=50, area_max=500,
     result = filter_by_region(nuclei, lambda r: area_min < r.area < area_max, threshold)
 
     return result
+        
 
-
-def binarize(image, radius, min_size):
+def binarize(image, radius, min_size, method='mean',percentile=0.5,equalize=False):
     """Apply local mean threshold to find outlines. Filter out
     background shapes. Otsu threshold on list of region mean intensities will remove a few
     dark cells. Could use shape to improve the filtering.
     """
-    dapi = skimage.img_as_ubyte(image)
     # slower than optimized disk in ImageJ
     # scipy.ndimage.uniform_filter with square is fast but crappy
     selem = skimage.morphology.disk(radius)
-    mean_filtered = skimage.filters.rank.mean(dapi, selem=selem)
-    mask = dapi > mean_filtered
+    if equalize:
+        image = skimage.filters.rank.equalize(image,selem=selem)
+    
+    dapi = skimage.img_as_ubyte(image)
+
+    if method == 'mean':
+        filtered = skimage.filters.rank.mean(dapi, selem=selem)
+    elif method == 'median':
+        filtered = skimage.filters.rank.median(dapi, selem=selem)
+    elif method=='otsu':
+        filtered = skimage.filters.rank.otsu(dapi, selem=selem)
+    elif method=='percentile':
+        filtered = skimage.filters.rank.percentile(dapi,selem=selem,p0=percentile)
+    
+    mask = dapi > filtered
     mask = skimage.morphology.remove_small_objects(mask, min_size=min_size)
 
     return mask
