@@ -938,6 +938,14 @@ class Snake():
         return nuclei_tracked
 
     @staticmethod
+    def _merge_triangle_hash(df_0,df_1,alignment,threshold=2):
+        import ops.triangle_hash as th
+        df_1 = df_1.rename(columns={'tile':'site'})
+        model = th.build_linear_model(alignment['rotation'],alignment['translation'])
+        
+        return th.merge_sbs_phenotype(df_0,df_1,model,threshold=threshold)
+
+    @staticmethod
     def add_method(class_, name, f):
         f = staticmethod(f)
         exec('%s.%s = f' % (class_, name))
