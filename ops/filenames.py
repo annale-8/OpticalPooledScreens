@@ -15,6 +15,7 @@ FILE_PATTERN = [
         r'(?:(?P<cycle>[^_\.]*).*?(?:.*MMStack)?.)?',
         r'(?P<well>[A-H][0-9]*)',
         r'(?:[_-]Site[_-](?P<site>([0-9]+)))?',
+        r'(?:[_-]Channel[_-](?P<channel>.*)\_.*)?',
         r'(?:_Tile-(?P<tile>([0-9]+)))?',
         r'(?:\.(?P<tag>.*))*\.(?P<ext>.*)']
 
@@ -30,7 +31,7 @@ ND2_FILE_PATTERN = [
         r'(?P<dataset>(?P<date>[0-9]{8}).*?)\/',
         r'(?:(?P<expt>.*)\/)',
         r'(?:(?P<plate>.*)\/)',
-        r'(MAX_)?(?P<mag>[0-9]+x).',
+        r'(MAX_)?(?P<mag>[0-9]+[xX]).',
         r'(?:(?P<cycle>[^_\.]*)\/)',
         r'(?:Well(?P<well>[A-H][0-9]*))?',
         r'(?:_Channel(?P<channel>.*)\_.*)?',
@@ -39,13 +40,11 @@ ND2_FILE_PATTERN = [
 TIF_FILE_PATTERN = [
         r'((?P<home>.*)\/)?',
         r'(?P<dataset>(?P<date>[0-9]{8}).*?)\/',
-        r'(?:(?P<expt>.*)\/)',
-        r'(?:(?P<plate>.*)\/)',
-        r'(MAX_)?(?P<mag>[0-9]+x).',
-        r'(?:(?P<cycle>[^_\.]*))?',
-        r'(?:.*?(?P<well>[A-H][0-9]*))?',
-        r'(?:[_-]Site[_-](?P<site>([0-9]+)))?',
-        r'(?:_Channel-(?P<channel>)\.)?',
+        r'(?:(?P<subdir>.*)\/)*',
+        r'(MAX_)?(?P<mag>[0-9]+[xX]).',
+        r'(?:(?P<cycle>[^_\.]*))',
+        r'(?:\_(?P<well>[A-H][0-9]*))?',
+        r'(?:[-_]Channel[-_](?P<channel>.*))?',
         r'(?:\.(?P<tag>.*))*\.(?P<ext>.*)']
 
 

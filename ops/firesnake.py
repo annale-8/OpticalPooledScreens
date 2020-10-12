@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import scipy
 import matplotlib
-# matplotlib.use('TkAgg') #uncomment when running snakemake
+matplotlib.use('TkAgg') #uncomment when running snakemake
 from nd2reader import ND2Reader
 import skimage
 import ops.features
@@ -109,16 +109,23 @@ class Snake():
         return maxed 
 
     @staticmethod
-    def _merge_csv(csv_files):
+    def _merge_csv(tag,filetype='csv',subdir='process'):
         """Reads .csv files, concatenates them into a pandas df, and saves as merged .h5 file
         """
-        df = pd.DataFrame([])
-        for f in csv_files:
+        files = glob.glob('{subdir}/*.{tag}.csv'.format(subdir=subdir,tag=tag))
+    
+        arr = []
+        for f in files:
             try:
-                df_file = pd.read_csv(f)
-                df = df.append(df_file)
-            except:
-                continue
+                arr += [pd.read_csv(f)]
+            except pd.errors.EmptyDataError:
+                pass
+        df = pd.concat(arr)
+        
+        if filetype=='csv':
+            df.to_csv(tag+'.csv')
+        else:
+            df.to_hdf(tag+'.hdf', tag, mode='w')
 
         return df
 
@@ -291,6 +298,9 @@ class Snake():
         """Find nuclei from DAPI. Find cell foreground from aligned but unfiltered 
         data. Expects data to have shape (CHANNEL, I, J).
         """
+        data = np.array(data)
+        if data.ndim == 4:
+            data = data[0]
 
         if isinstance(data, list):
             dapi = data[0].astype(np.uint16) #[0] indicated DAPI channel #
@@ -351,16 +361,21 @@ class Snake():
         return nuclei.astype(np.uint16)
 
     @staticmethod
-    def _segment_cells(data, nuclei, threshold):
+    def _segment_cells(data, nuclei, threshold, DAPI=True):
         """Segment cells from aligned data. Matches cell labels to nuclei labels.
         Note that labels can be skipped, for example if cells are touching the 
         image boundary.
         """
+        if DAPI:   
+            sbs = 1
+        else:
+            sbs = 0
+
         if data.ndim == 4:
             # no DAPI, min over cycles, mean over channels
-            mask = data[:, 1:].min(axis=0).mean(axis=0)
+            mask = data[:, sbs:].min(axis=0).mean(axis=0)
         elif data.ndim == 3:
-            mask = np.median(data[1:], axis=0)
+            mask = np.median(data[sbs:], axis=0)
         elif data.ndim == 2:
             mask = data
         else:
@@ -671,7 +686,7 @@ class Snake():
         return df_reads
 
     @staticmethod
-    def _call_reads_percentiles(df_bases, peaks=None, correction_only_in_cells=True, imaging_order='GTAC'):
+    def _call_reads_percentiles(df_bases, peaks=None, correction_only_in_cells=True, imaging_order='GTAC', percentile=98, correction_by_cycle=False):
         # print(imaging_order)
         """Median correction performed independently for each tile.
         Use the `correction_only_in_cells` flag to specify if correction
@@ -690,7 +705,7 @@ class Snake():
         df_reads = (df_bases
             .pipe(ops.in_situ.clean_up_bases)
             .pipe(ops.in_situ.do_percentile_call, cycles=cycles, channels=channels, 
-                correction_only_in_cells=correction_only_in_cells)
+                correction_only_in_cells=correction_only_in_cells, percentile=percentile, correction_by_cycle=correction_by_cycle)
             )
 
         if peaks is not None:

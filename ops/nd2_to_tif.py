@@ -13,8 +13,9 @@ def nd2_to_tif(input_filename,meta=True):
     for k,v in sorted(info.items()):
         file_description[k] = v
     file_description['ext']='tif'
-    file_description['subdir']=file_description['plate']+'_tif/'+file_description['mag']+'_'+file_description['cycle']
-
+    # file_description['subdir']=file_description['plate']+'_tif/'+file_description['mag']+'_'+file_description['cycle']
+    # file_description['subdir']=file_description['plate']+file_description['mag']+'_'+file_description['cycle']
+    file_description['subdir']='preprocess/'+file_description['mag']+'_'+file_description['cycle']
 
     with ND2Reader(input_filename) as images:
         images.iter_axes='v'
@@ -38,6 +39,7 @@ def nd2_to_tif(input_filename,meta=True):
                              
         # METADATA EXTRACTION
         if meta==True:
+            file_description['subdir']='metadata/'
             well_metadata = [{
                                 'filename':ops.filenames.name_file(file_description,site=str(site)),
                                 'field_of_view':site,

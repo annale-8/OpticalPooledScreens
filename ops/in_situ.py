@@ -62,42 +62,66 @@ def clean_up_bases(df_bases):
     """
     return df_bases.sort_values([WELL, TILE, CELL, READ, CYCLE, CHANNEL])
 
-def do_percentile_call(df_bases, cycles=1, channels=4, correction_only_in_cells=False):
-    """Call reads from raw base signal using median correction. Use the 
+def do_percentile_call(df_bases, cycles=1, channels=4, correction_only_in_cells=False, percentile=98, correction_by_cycle=False):
+    """Call reads from raw base signal using percentile correction. Use the 
     `correction_within_cells` flag to specify if correction is based on reads within 
     cells, or all reads.
     """
     # print(imaging_order)
     # print('nchannels ', channels)
-    if correction_only_in_cells:
-        # first obtain transformation matrix W
-        X_ = dataframe_to_values(df_bases.query('cell > 0'))
-        _, W = transform_percentiles(X_.reshape(-1, channels))
+    # if correction_only_in_cells:
+    #     # first obtain transformation matrix W
+    #     X_ = dataframe_to_values(df_bases.query('cell > 0'))
+    #     _, W = transform_percentiles(X_.reshape(-1, channels),percentile)
 
-        # then apply to all data
-        X = dataframe_to_values(df_bases)
-        Y = W.dot(X.reshape(-1, channels).T).T.astype(int)
+    #     # then apply to all data
+    #     X = dataframe_to_values(df_bases)
+    #     Y = W.dot(X.reshape(-1, channels).T).T.astype(int)
+
+    # else:
+    #     X = dataframe_to_values(df_bases)
+    #     Y, W = transform_percentiles(X.reshape(-1, channels),percentile)
+    #     print(Y,Y.shape,X.shape,X)
+
+        
+    def correction(df,channels,percentile,correction_only_in_cells):
+        if correction_only_in_cells:
+            # first obtain transformation matrix W
+            X_ = dataframe_to_values(df.query('cell > 0'))
+            _, W = transform_percentiles(X_.reshape(-1, channels),percentile)
+
+            # then apply to all data
+            X = dataframe_to_values(df)
+            Y = W.dot(X.reshape(-1, channels).T).T.astype(int)
+        else:
+            X = dataframe_to_values(df)
+            Y, W = transform_percentiles(X.reshape(-1, channels),percentile)
+        return Y,W
+
+    if correction_by_cycle:
+        Y = np.empty(df_bases.pipe(len),dtype=int).reshape(-1,channels)
+        for cycle, (_, df_cycle) in enumerate(df_bases.groupby('cycle')):
+            Y[cycle::cycles,:],_ = correction(df_cycle,channels,percentile,correction_only_in_cells)
     else:
-        X = dataframe_to_values(df_bases)
-        Y, W = transform_percentiles(X.reshape(-1, channels))
-        print(Y,Y.shape,X.shape,X)
+        Y,W = correction(df_bases,channels,percentile,correction_only_in_cells)
+
     df_reads = call_barcodes(df_bases, Y, cycles=cycles, channels=channels)
 
     return df_reads
 
-def transform_percentiles(X):
+def transform_percentiles(X,p):
     """For each dimension, find points where that dimension is >=98th percentile intensity. Use median of those points to define new axes. 
     Describe with linear transformation W so that W * X = Y.
     """
 
-    def get_percentiles(X):
+    def get_percentiles(X,p):
         arr = []
         for i in range(X.shape[1]):
             # print(X[:,i:i+1].shape)
             # print(X.shape)
             rowsums=np.sum(X,axis=1)[:,np.newaxis]
             X_rel = (X/rowsums)
-            perc = np.nanpercentile(X_rel[:,i],98)
+            perc = np.nanpercentile(X_rel[:,i],p)
             high = X[X_rel[:,i] >= perc]
             #print(a.shape)
             #print((X/a)[0:2,:])
@@ -108,7 +132,7 @@ def transform_percentiles(X):
         # print(M)
         return M
 
-    M = get_percentiles(X).T
+    M = get_percentiles(X,p).T
     # print(X)
     # print(M)
     # print(M.shape)

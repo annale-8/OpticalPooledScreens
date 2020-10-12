@@ -3,6 +3,7 @@ import pandas as pd
 from scipy.spatial import Delaunay
 from scipy.spatial.distance import cdist
 from sklearn.linear_model import RANSACRegressor, LinearRegression
+import warnings
 
 import ops.utils
 
@@ -21,15 +22,12 @@ def nine_edge_hash(dt, i):
     """For triangle `i` in Delaunay triangulation `dt`, extract the vector 
     displacements of the 9 edges containing to at least one vertex in the 
     triangle.
-
     Raises an error if triangle `i` lies on the outer boundary of the triangulation.
-
     Example:
     dt = Delaunay(X_0)
     i = 0
     segments, vector = nine_edge_hash(dt, i)
     plot_nine_edges(X_0, segments)
-
     """
     # indices of inner three vertices
     # already in CCW order
@@ -162,9 +160,12 @@ def evaluate_match(df_0, df_1, threshold_triangle=0.3, threshold_point=2):
     if sum(filt) < 5:
         return None, None, -1
 
-    # use matching triangles to define transformation
-    model = RANSACRegressor()
-    model.fit(X, Y)
+    with warnings.catch_warnings():
+        # ignore all caught warnings
+        warnings.filterwarnings("ignore")
+        # use matching triangles to define transformation
+        model = RANSACRegressor()
+        model.fit(X, Y)
     
     rotation = model.estimator_.coef_
     translation = model.estimator_.intercept_
@@ -195,8 +196,11 @@ def prioritize(df_info_0, df_info_1, matches):
     """
     a = df_info_0.loc[matches[:, 0]].values
     b = df_info_1.loc[matches[:, 1]].values
-    model = RANSACRegressor()
-    model.fit(a, b)
+    with warnings.catch_warnings():
+        # ignore all caught warnings
+        warnings.filterwarnings("ignore")
+        model = RANSACRegressor(min_samples=2)
+        model.fit(a, b)
 
     # rank all pairs by distance
     predicted = model.predict(df_info_0.values)
@@ -213,13 +217,16 @@ def remove_overlap(xs, ys):
     ys = set(map(tuple, ys))
     return [tuple(x) for x in xs if tuple(x) not in ys]
 
-def brute_force_pairs(df_0, df_1):
-    from tqdm import tqdm_notebook as tqdn
+def brute_force_pairs(df_0, df_1, threshold_point=2, n_jobs=-2,tqdm=True):
+    work = df_1.groupby('site')
+    if tqdm:
+        from tqdm import tqdm_notebook as tqdn
+        work = tqdn(work,'site')
     arr = []
-    for site, df_s in tqdn(df_1.groupby('site'), 'site'):
+    for site, df_s in work:
 
         def work_on(df_t):
-            rotation, translation, score = evaluate_match(df_t, df_s)
+            rotation, translation, score = evaluate_match(df_t, df_s, threshold_point=threshold_point)
             determinant = None if rotation is None else np.linalg.det(rotation)
             result = pd.Series({'rotation': rotation, 
                                 'translation': translation, 
@@ -228,7 +235,7 @@ def brute_force_pairs(df_0, df_1):
             return result
 
         (df_0
-         .pipe(ops.utils.gb_apply_parallel, 'tile', work_on)
+         .pipe(ops.utils.gb_apply_parallel, 'tile', work_on,n_jobs=n_jobs)
          .assign(site=site)
          .pipe(arr.append)
         )
@@ -237,40 +244,14 @@ def brute_force_pairs(df_0, df_1):
             .sort_values('score', ascending=False)
             )
 
-def parallel_process(func, args_list, n_jobs, tqdn=True):
+def parallel_process(func, args_list, n_jobs, tqdm=True):
     from joblib import Parallel, delayed
     work = args_list
-    if tqdn:
+    if tqdm:
         from tqdm import tqdm_notebook 
         work = tqdm_notebook(work, 'work')
     return Parallel(n_jobs=n_jobs)(delayed(func)(*w) for w in work)
 
-
-# def merge_sbs_phenotype(df_sbs_, df_ph_, model):
-
-#     X = df_sbs_[['i', 'j']].values
-#     Y = df_ph_[['i', 'j']].values
-#     Y_pred = model.predict(X)
-
-#     threshold = 2
-
-#     distances = cdist(Y, Y_pred, metric='sqeuclidean')
-#     ix = distances.argmin(axis=1)
-#     filt = np.sqrt(distances.min(axis=1)) < threshold
-#     columns = {'site': 'site', 'cell_ph': 'cell_ph',
-#               'i': 'i_ph', 'j': 'j_ph',}
-
-#     cols_final = ['well', 'tile', 'cell', 'i', 'j', 
-#                   'site', 'cell_ph', 'i_ph', 'j_ph', 'distance'] 
-#     sbs = df_sbs_.iloc[ix[filt]].reset_index(drop=True)
-#     return (df_ph_
-#      [filt].reset_index(drop=True)
-#      [list(columns.keys())]
-#      .rename(columns=columns)
-#      .pipe(lambda x: pd.concat([sbs, x], axis=1))
-#      .assign(distance=np.sqrt(distances.min(axis=1))[filt])
-#      [cols_final]
-#     )
 
 def merge_sbs_phenotype(df_0_, df_1_, model, threshold=2):
 
@@ -321,37 +302,23 @@ def plot_alignments(df_ph, df_sbs, df_align, site):
         ax.scatter(Y[:, 0], Y[:, 1], s=1, label=tile)
         print(tile)
 
-    ax.set_xlim([-50, 1550])
-    ax.set_ylim([-50, 1550])
+    # ax.set_xlim([-50, 1550])
+    # ax.set_ylim([-50, 1550])
     
     return ax
 
-
-def multistep_alignment(df_0, df_1, df_info_0, df_info_1, 
-                        initial_sites=8, batch_size=180):
-    """Provide triangles from one well only.
+def multistep_alignment(df_0, df_1, df_info_0, df_info_1, det_range=(1.125, 1.186),
+                        initial_sites=8, batch_size=180, threshold_point=2, tqdm=True, n_jobs=-2):
+    """Provide triangles from one well only. Intitial_sites can be a list of tuples with pre-determined
+    matching pairs of sites [(tile_0,site_0),...]. Should be good with 5-8 initial sites.
+    rotation: rotation matrix
+    translation: translation matrix
+    score: average distance between closest/matched points
+    determinant: determinant of rotation matrix, indicative of scaling
     """
-    sites = (pd.Series(df_info_1.index)
-        .sample(initial_sites, replace=False, random_state=0)
-        .pipe(list))
-
-    df_initial = brute_force_pairs(df_0, df_1.query('site == @sites'))
-
-    dets = df_initial.query('score > 0.3')['determinant']
-    d0, d1 = dets.min(), dets.max()
-    delta = (d1 - d0)
-    d0 -= delta * 1.5
-    d1 += delta * 1.5
-
-    # d0, d1 = 1.125, 1.186
-    gate = '@d0 <= determinant <= @d1 & score > 0.1'
-
-    alignments = [df_initial.query(gate)]
-
-    #### iteration
 
     def work_on(df_t, df_s):
-        rotation, translation, score = evaluate_match(df_t, df_s)
+        rotation, translation, score = evaluate_match(df_t, df_s, threshold_point=threshold_point)
         determinant = None if rotation is None else np.linalg.det(rotation)
         result = pd.Series({'rotation': rotation, 
                             'translation': translation, 
@@ -359,7 +326,37 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1,
                             'determinant': determinant})
         return result
 
-    batch_size = batch_size
+    if isinstance(initial_sites,list):
+        arr = []
+        for tile,site in initial_sites:
+            result = work_on(df_0.query('tile==@tile'),df_1.query('site==@site'))
+            result.at['site']=site
+            result.at['tile']=tile
+            arr.append(result)
+            
+        df_initial = pd.DataFrame(arr)
+    else:
+        sites = (pd.Series(df_info_1.index)
+            .sample(initial_sites, replace=False, random_state=0)
+            .pipe(list))
+
+        df_initial = brute_force_pairs(df_0, df_1.query('site == @sites'),threshold_point=threshold_point,tqdm=tqdm, n_jobs=n_jobs)
+
+    # dets = df_initial.query('score > 0.3')['determinant']
+    # d0, d1 = dets.min(), dets.max()
+    # delta = (d1 - d0)
+    # d0 -= delta * 1.5
+    # d1 += delta * 1.5
+
+    d0, d1 = det_range
+
+    gate = '@d0 <= determinant <= @d1 & score > 0.1'
+
+    alignments = [df_initial.query(gate)]
+
+    #### iteration
+
+    batch_size = 180
 
     while True:
         df_align = (pd.concat(alignments, sort=True)
@@ -379,7 +376,7 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1,
         for ix_0, ix_1 in candidates[:batch_size]:
             work += [[d_0[ix_0], d_1[ix_1]]]    
 
-        df_align_new = (pd.concat(parallel_process(work_on, work, 18), axis=1).T
+        df_align_new = (pd.concat(parallel_process(work_on, work, n_jobs, tqdm=tqdm), axis=1).T
          .assign(tile=[t for t, _ in candidates[:batch_size]], 
                  site=[s for _, s in candidates[:batch_size]])
         )
@@ -388,4 +385,4 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1,
         if len(df_align_new.query(gate)) == 0:
             break
             
-    return df_align, d0, d1
+    return df_align
