@@ -33,6 +33,7 @@ ND2_FILE_PATTERN = [
         r'(?:(?P<plate>.*)\/)',
         r'(MAX_)?(?P<mag>[0-9]+[xX]).',
         r'(?:(?P<cycle>[^_\.]*)\/)',
+        r'(?:(?P<subfolder>.*)\/)',
         r'(?:Well(?P<well>[A-H][0-9]*))?',
         r'(?:_Channel(?P<channel>.*)\_.*)?',
         r'(?:\.(?P<tag>.*))*\.(?P<ext>.*)']
