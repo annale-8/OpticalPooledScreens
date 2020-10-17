@@ -331,6 +331,15 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1, det_range=(1.125, 1.18
                         initial_sites=8, batch_size=180, tqdn=True, n_jobs=-2):
     """Provide triangles from one well only.
     """
+    def work_on(df_t, df_s):
+        rotation, translation, score = evaluate_match(df_t, df_s)
+        determinant = None if rotation is None else np.linalg.det(rotation)
+        result = pd.Series({'rotation': rotation, 
+                            'translation': translation, 
+                            'score': score, 
+                            'determinant': determinant})
+        return result
+
     if isinstance(initial_sites,list):
         arr = []
         for tile,site in initial_sites:
@@ -362,15 +371,6 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1, det_range=(1.125, 1.18
     alignments = [df_initial.query(gate)]
 
     #### iteration
-
-    def work_on(df_t, df_s):
-        rotation, translation, score = evaluate_match(df_t, df_s)
-        determinant = None if rotation is None else np.linalg.det(rotation)
-        result = pd.Series({'rotation': rotation, 
-                            'translation': translation, 
-                            'score': score, 
-                            'determinant': determinant})
-        return result
 
     batch_size = batch_size
 
