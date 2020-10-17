@@ -327,21 +327,34 @@ def plot_alignments(df_ph, df_sbs, df_align, site):
     return ax
 
 
-def multistep_alignment(df_0, df_1, df_info_0, df_info_1, 
-                        initial_sites=8, batch_size=180):
+def multistep_alignment(df_0, df_1, df_info_0, df_info_1, det_range=(1.125, 1.186),
+                        initial_sites=8, batch_size=180, tqdn=True, n_jobs=-2):
     """Provide triangles from one well only.
     """
-    sites = (pd.Series(df_info_1.index)
-        .sample(initial_sites, replace=False, random_state=0)
-        .pipe(list))
+    if isinstance(initial_sites,list):
+        arr = []
+        for tile,site in initial_sites:
+            result = work_on(df_0.query('tile==@tile'),df_1.query('site==@site'))
+            result.at['site']=site
+            result.at['tile']=tile
+            arr.append(result)
+            
+        df_initial = pd.DataFrame(arr)
+    else:
+        sites = (pd.Series(df_info_1.index)
+            .sample(initial_sites, replace=False, random_state=0)
+            .pipe(list))
 
-    df_initial = brute_force_pairs(df_0, df_1.query('site == @sites'))
+        df_initial = brute_force_pairs(df_0, df_1.query('site == @sites'),threshold_point=threshold_point,tqdm=tqdm, n_jobs=n_jobs)
 
-    dets = df_initial.query('score > 0.3')['determinant']
-    d0, d1 = dets.min(), dets.max()
-    delta = (d1 - d0)
-    d0 -= delta * 1.5
-    d1 += delta * 1.5
+    if det_range = None:
+        dets = df_initial.query('score > 0.3')['determinant']
+        d0, d1 = dets.min(), dets.max()
+        delta = (d1 - d0)
+        d0 -= delta * 1.5
+        d1 += delta * 1.5
+    else:
+        d0, d1 = det_range
 
     # d0, d1 = 1.125, 1.186
     gate = '@d0 <= determinant <= @d1 & score > 0.1'
@@ -379,7 +392,7 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1,
         for ix_0, ix_1 in candidates[:batch_size]:
             work += [[d_0[ix_0], d_1[ix_1]]]    
 
-        df_align_new = (pd.concat(parallel_process(work_on, work, 18), axis=1).T
+        df_align_new = (pd.concat(parallel_process(work_on, work, n_jobs=n_jobs, tqdn=tqdn), axis=1).T
          .assign(tile=[t for t, _ in candidates[:batch_size]], 
                  site=[s for _, s in candidates[:batch_size]])
         )
