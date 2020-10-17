@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.spatial import Delaunay
 from scipy.spatial.distance import cdist
 from sklearn.linear_model import RANSACRegressor, LinearRegression
-
+import warnings
 import ops.utils
 
 def find_triangles(df):
@@ -193,10 +193,11 @@ def prioritize(df_info_0, df_info_1, matches):
     and two columns of coordinates. Matches should be supplied as an 
     Nx2 array of tile (site) identifiers.
     """
-    a = df_info_0.loc[matches[:, 0]].values
-    b = df_info_1.loc[matches[:, 1]].values
-    model = RANSACRegressor()
-    model.fit(a, b)
+    with warnings.catch_warnings():
+        # ignore all caught warnings
+        warnings.filterwarnings("ignore")
+        model = RANSACRegressor(min_samples=2)
+        model.fit(a, b)
 
     # rank all pairs by distance
     predicted = model.predict(df_info_0.values)
