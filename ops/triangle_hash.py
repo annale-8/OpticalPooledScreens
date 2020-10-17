@@ -347,7 +347,7 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1, det_range=(1.125, 1.18
 
         df_initial = brute_force_pairs(df_0, df_1.query('site == @sites'),threshold_point=threshold_point,tqdm=tqdm, n_jobs=n_jobs)
 
-    if det_range = None:
+    if det_range == None:
         dets = df_initial.query('score > 0.3')['determinant']
         d0, d1 = dets.min(), dets.max()
         delta = (d1 - d0)
