@@ -377,6 +377,8 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1, det_range=(1.125, 1.18
     #### iteration
 
     batch_size = batch_size
+    d_0 = dict(list(df_0.groupby('tile')))
+    d_1 = dict(list(df_1.groupby('site')))
 
     while True:
         df_align = (pd.concat(alignments, sort=True)
@@ -391,10 +393,24 @@ def multistep_alignment(df_0, df_1, df_info_0, df_info_1, det_range=(1.125, 1.18
             len(matches), df_align.shape[0]))
 
         work = []
-        d_0 = dict(list(df_0.groupby('tile')))
-        d_1 = dict(list(df_1.groupby('site')))
+        no_key = 0
         for ix_0, ix_1 in candidates[:batch_size]:
-            work += [[d_0[ix_0], d_1[ix_1]]]    
+            try:
+                work += [[d_0[ix_0], d_1[ix_1]]]
+            except:
+                no_key += 1
+                continue    
+        if no_key > 0:
+            redo = 0
+            while True:
+                ix_0, ix_1 = candidates[(batch_size+redo)]
+                try:
+                    work += [[d_0[ix_0], d_1[ix_1]]]
+                except:
+                    redo += 1
+                    continue 
+                if len(work) == batch_size:
+                    break
 
         df_align_new = (pd.concat(parallel_process(work_on, work, n_jobs=n_jobs, tqdn=tqdn), axis=1).T
          .assign(tile=[t for t, _ in candidates[:batch_size]], 
