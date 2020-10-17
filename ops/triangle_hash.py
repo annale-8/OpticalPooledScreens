@@ -193,6 +193,9 @@ def prioritize(df_info_0, df_info_1, matches):
     and two columns of coordinates. Matches should be supplied as an 
     Nx2 array of tile (site) identifiers.
     """
+    a = df_info_0.loc[matches[:, 0]].values
+    b = df_info_1.loc[matches[:, 1]].values
+
     with warnings.catch_warnings():
         # ignore all caught warnings
         warnings.filterwarnings("ignore")
