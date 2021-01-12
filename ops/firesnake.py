@@ -22,6 +22,7 @@ import ops.in_situ
 from ops.process import Align
 import ops.filenames
 import ops.nd2_to_tif
+import glob
 
 
 class Snake():
@@ -125,10 +126,22 @@ class Snake():
         if filetype=='csv':
             df.to_csv(tag+'.csv')
         else:
-            df.to_hdf(tag+'.hdf', tag, mode='w')
+            df.to_hdf(tag+'.h5', tag, mode='w')
 
         return df
 
+
+    @staticmethod
+    def _apply_illumination_correction(data, correction, n_jobs=1, backend='threading'):
+        if n_jobs == 1:
+            return (data/correction).astype(np.uint16)
+        else:
+            return ops.utils.applyIJ_parallel(Snake._apply_illumination_correction,
+                arr=data,
+                correction=correction,
+                backend=backend,
+                n_jobs=n_jobs
+                )
 
     @staticmethod
     def _align_SBS(data, method='DAPI', upsample_factor=2, window=2, cutoff=1,
@@ -394,79 +407,15 @@ class Snake():
 
         return cells
 
-    @staticmethod
-    def _segment_cells_GFP(data, nuclei, threshold, channel, filter_nuclei=True):
-        """Segment cells from phenotyping data. Matches cell labels to nuclei labels.
-        Note that labels can be skipped, for example if cells are touching the 
-        image boundary.
-        Expects data to be in the order of (CYCLE, CHANNEL, I, J)
-        """
-
-        if data.ndim == 4:
-            mask = data[0][int(channel)]
-        elif data.ndim == 3:
-            mask = data[int(channel)]
-        elif data.ndim == 2:
-            mask = data
-        else:
-            raise ValueError
-
-        mask = mask > threshold
-        filled = scipy.ndimage.binary_fill_holes(mask)
-
-        # if filter_nuclei:
-        #         # remove nuclei from nuclei mask that do not pass GFP threshold
-        #     filtered_nuclei = np.multiply(nuclei,mask)
-
-        try:
-            # skimage precision warning
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                # cells = ops.process.find_cells_GFP(filtered_nuclei, mask, **kwargs)
-                cells = ops.process.find_cells(nuclei, filled)
-        except ValueError:
-            print('segment_cells error -- no cells')
-            cells = nuclei
-
-        return cells
-
 
     @staticmethod
-    def _segment_cells_HEK(data, cells, threshold, area_min, channel, filter_nuclei=True):
-        """
-        Filters all segmented cells by area (~min nuclear area) and GFP signal to determine mask of
-        HEK cells only. 
-        Expects data to have shape (CYCLE, CHANNEL, I, J)
-        """
-        
-        kwargs = dict(threshold=lambda x: threshold, area_min=area_min)
-
-        if data.ndim == 4:
-            mask = data[0][int(channel)]
-        elif data.ndim == 3:
-            mask = data[int(channel)]
-        elif data.ndim == 2:
-            mask = data
-        else:
-            raise ValueError
-
-        mask = mask > threshold
-        filled = scipy.ndimage.binary_fill_holes(mask)
-
-        filtered_cells  = np.multiply(filled, cells)
-
-        HEK_cells = ops.process.filter_by_region(filtered_cells, lambda r: area_min < r.area, threshold, relabel=False)
-
-        return HEK_cells.astype(np.uint16)
-
-    @staticmethod
-    def _segment_HEKs(data, nuclei, channel, threshold, area_min):
+    def _segment_HEKs(data, nuclei, channel, threshold, area_min, filter_nuclei=False):
         """Combines segment_cells_GFP and segment_cells_HEK
         Segment cells from phenotyping data. Matches cell labels to nuclei labels.
         Note that labels can be skipped, for example if cells are touching the 
         image boundary.
         Filters all segmented cells by area (~min nuclear area) and GFP signal to determine mask of
-        HEK cells only. 
+        HEK cells AND nuclei of non-HEK cells. 
         Expects data to have shape (CYCLE, CHANNEL, I, J)
         """
         
@@ -484,6 +433,11 @@ class Snake():
 
         mask = mask > threshold
         filled = scipy.ndimage.binary_fill_holes(mask)
+
+        
+        # remove nuclei from nuclei mask that do not pass GFP threshold
+        if filter_nuclei:
+            nuclei = np.multiply(nuclei,filled)
 
         try:
             # skimage precision warning
@@ -743,8 +697,8 @@ class Snake():
         return df
 
     @staticmethod
-    def _extract_phenotype_synapse_puncta(data_phenotype, puncta, cells, edges, wildcards):
-        """Expects data_phenotype to have shape (CYCLE, CHANNEL, I, J)"""
+    def _extract_phenotype_synapse_puncta(data_phenotype, puncta, cells, wildcards):
+        """Expects data_phenotype to have shape (CHANNEL, I, J)"""
 
         if puncta.max() == 0:
             return
@@ -756,8 +710,7 @@ class Snake():
         import ops.features
 
         # add cell labels corresponding to each punctae
-        cell_label = ops.process.assign_cells_puncta(cells, puncta)[1]
-        edge_label = ops.process.assign_cells_puncta(edges, puncta)[1]
+        cell_label = ops.process.assign_cells_puncta(cells, puncta)
 
         features_p = ops.features.features_synapse_puncta
         features_p = {k + '_puncta': v for k,v in features_p.items()}
@@ -765,13 +718,42 @@ class Snake():
         df_p = (Snake._extract_features(data_phenotype, puncta, wildcards, features_p)
             .rename(columns={'area': 'area_puncta'}))
       
-        df_p = df_p.rename_axis('punctae').join(pd.Series(cell_label, name='cell'), on='punctae').join(pd.Series(edge_label, name='edge'), on='punctae')
+        df_p['cell'] = df_p['label'].map(cell_label)
         df_p = df_p[df_p.cell != 0]
         
-        return df_p
+        return (df_p.rename(columns={'label': 'punct'}))
 
     @staticmethod
-    def _extract_phenotype_synapse_cell(data_phenotype, cells, edges, wildcards):
+    def _extract_phenotype_synapse_cell(data_phenotype, cells, wildcards):
+        """Expects data_phenotype to have shape (CHANNEL, I, J)"""
+
+        if cells.max() == 0:
+            return
+        if data_phenotype.ndim == 4:
+            data_phenotype = data_phenotype[0]
+
+        import ops.features
+
+        features_c = ops.features.features_synapse_cell
+
+        features_c = {k + '_cell': v for k,v in features_c.items()}
+
+        df =  (Snake._extract_features(data_phenotype, cells, wildcards, features_c)
+            .rename(columns={'area': 'area_cell'}))
+
+        # add column for [x,y] positions
+        df['ij'] = df[['i','j']].values.tolist()
+        ij = df['ij'].values.tolist()
+
+        # calculate matrix of Euclidean distance between all cells in FOV
+        distance = scipy.spatial.distance.cdist(ij, ij, 'euclidean')
+        min_dist = np.where(distance>0, distance,distance.max()).min(1)
+        df['min_dist'] = min_dist
+
+        return (df.rename(columns={'label': 'cell'}))
+
+    @staticmethod
+    def _extract_phenotype_synapse_cell_edge(data_phenotype, cells, edges, wildcards):
         """Expects data_phenotype to have shape (CYCLE, CHANNEL, I, J)"""
 
         if cells.max() == 0:

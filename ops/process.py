@@ -108,14 +108,24 @@ def assign_cells_puncta(cells, puncta):
     """Assigns cell label to each puncta (label) based on most frequent cell assignment."""
 
     # consider only puncta where cell > 0
-    cell_mask = np.clip(cells, 0, 1)
-    overlap = np.multiply(cell_mask,puncta)
+    # cell_mask = np.clip(cells, 0, 1)
+    # overlap = np.multiply(cell_mask,puncta)
 
-    cell_label = np.zeros(((np.max(puncta)+1),), dtype=int)
-    for i in np.unique(overlap):
-        cell_label[i] = scipy.stats.mode(cells[np.where(puncta == i)])[0][0]
+    # cell_label = np.zeros(((np.max(puncta)+1),), dtype=int)
+    # for i in np.unique(overlap):
+    #     cell_label[i] = scipy.stats.mode(cells[np.where(puncta == i)])[0][0]
+
+    if cells.shape != puncta.shape:
+        print('Cell and puncta masks have different shapes')
+
+    p = puncta.flatten()
+    c = cells.flatten()
+
+    df = pd.DataFrame({'puncta':p, 'cell':c})
+    # assign puncta to most frequent cell label (if multiple modes, assign to lower value)
+    label_dict = df.groupby('puncta').agg(lambda x:x.value_counts().index[0]).to_dict()['cell']
     
-    return overlap.astype(np.uint16), cell_label
+    return label_dict
 
 def find_peaks(data, n=5):
     """Finds local maxima. At a maximum, the value is max - min in a 
@@ -134,6 +144,61 @@ def find_peaks(data, n=5):
     peaks[mask] = 0
     
     return peaks
+
+def calculate_illumination_correction(files, smooth=None, rescale=True, threading=False, slicer=slice(None)):
+    """calculate illumination correction field for use with apply_illumination_correction 
+    Snake method. Equivalent to CellProfiler's CorrectIlluminationCalculate module with 
+    option "Regular", "All", "Median Filter"
+    Note: algorithm originally benchmarked using ~250 images per plate to calculate plate-wise
+    illumination correction functions (Singh et al. J Microscopy, 256(3):231-236, 2014)
+    """
+    from ops.io import read_stack as read
+
+    N = len(files)
+
+    global data
+
+    data = read(files[0])[slicer]/N
+
+    def accumulate_image(file):
+        global data
+        data += read(file)[slicer]/N
+
+    if threading:
+        from joblib import Parallel, delayed
+        Parallel(n_jobs=-1,require='sharedmem')(delayed(accumulate_image)(file) for file in files[1:])
+    else:
+        for file in files[1:]:
+            accumulate_image(file)
+
+    data = np.squeeze(data.astype(np.uint16))
+
+    if not smooth:
+        # default is 1/20th area of image
+        # smooth = (np.array(data.shape[-2:])/8).mean().astype(int)
+        smooth = int(np.sqrt((data.shape[-1]*data.shape[-2])/(np.pi*20)))
+
+    selem = skimage.morphology.disk(smooth)
+
+    median_filter = ops.utils.applyIJ(skimage.filters.median)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        smoothed = median_filter(data,selem,behavior='rank')
+
+    if rescale:
+        @ops.utils.applyIJ
+        def rescale_channels(data):
+            # use 2nd percentile for robust minimum
+            robust_min = np.quantile(data.reshape(-1),q=0.02)
+            robust_min = 1 if robust_min == 0 else robust_min
+            data = data/robust_min
+            data[data<1] = 1 
+            return data
+
+        smoothed = rescale_channels(smoothed)
+
+    return smoothed
 
 @ops.utils.applyIJ
 def log_ndi(data, sigma=1, *args, **kwargs):

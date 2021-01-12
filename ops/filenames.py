@@ -29,11 +29,11 @@ FOLDER_PATTERN = [
 ND2_FILE_PATTERN = [
         r'((?P<home>.*)\/)?',
         r'(?P<dataset>(?P<date>[0-9]{8}).*?)\/',
-        r'(?:(?P<expt>.*)\/)',
-        r'(?:(?P<plate>.*)\/)',
+        # r'(?:(?P<expt>.*)\/)', # commented for S25
+        # r'(?:(?P<plate>.*)\/)',
         r'(MAX_)?(?P<mag>[0-9]+[xX]).',
         r'(?:(?P<cycle>[^_\.]*)\/)',
-        r'(?:(?P<subfolder>.*)\/)',
+        # r'(?:(?P<subfolder>.*)\/)', # commented for S25
         r'(?:Well(?P<well>[A-H][0-9]*))?',
         r'(?:_Channel(?P<channel>.*)\_.*)?',
         r'(?:\.(?P<tag>.*))*\.(?P<ext>.*)']

@@ -28,24 +28,6 @@ def masked(r, index):
     return r.intensity_image_full[index][r.filled_image]
 def bounds(r, index):
     return r.intensity_image_full[index][r.image]
-def intensity_features(init_features, channels, skip_index=None):
-    """ Add intensity feature definitions to dictionary"""
-    features = init_features.copy()
-    for channel, name in enumerate(channels):
-        if channel in skip_index:
-            continue
-        features.update({
-            '{}_int'.format(name) : lambda r: masked(r, channel).sum(),
-            '{}_mean'.format(name) : lambda r: masked(r, channel).mean(),
-            '{}_std'.format(name) : lambda r: np.std(masked(r, channel)),
-            '{}_median'.format(name) : lambda r: np.median(masked(r, channel)),
-            '{}_max'.format(name) : lambda r: masked(r, channel).max(),
-            '{}_min'.format(name) : lambda r: masked(r, channel).min(),
-            '{}_lower_quartile'.format(name) : lambda r: np.percentile(masked(r, channel),25),
-            '{}_upper_quartile'.format(name) : lambda r: np.percentile(masked(r, channel),75)
-            })
-
-    return features
 
 # FEATURES
 # these functions expect an `skimage.measure.regionprops` region as input
