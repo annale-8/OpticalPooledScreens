@@ -710,16 +710,19 @@ class Snake():
         import ops.features
 
         # add cell labels corresponding to each punctae
-        cell_label = ops.process.assign_cells_puncta(cells, puncta)
+        cell_label, zero_label = ops.process.assign_cells_puncta(cells, puncta)
+        filtered_puncta = np.isin(puncta,zero_label,invert=True)*puncta
 
         features_p = ops.features.features_synapse_puncta
         features_p = {k + '_puncta': v for k,v in features_p.items()}
 
-        df_p = (Snake._extract_features(data_phenotype, puncta, wildcards, features_p)
+        df_p = (Snake._extract_features(data_phenotype, filtered_puncta, wildcards, features_p)
             .rename(columns={'area': 'area_puncta'}))
       
         df_p['cell'] = df_p['label'].map(cell_label)
         df_p = df_p[df_p.cell != 0]
+
+        print(df_p.shape[0])
         
         return (df_p.rename(columns={'label': 'punct'}))
 

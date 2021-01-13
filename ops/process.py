@@ -123,9 +123,14 @@ def assign_cells_puncta(cells, puncta):
 
     df = pd.DataFrame({'puncta':p, 'cell':c})
     # assign puncta to most frequent cell label (if multiple modes, assign to lower value)
-    label_dict = df.groupby('puncta').agg(lambda x:x.value_counts().index[0]).to_dict()['cell']
+    df_label = df.groupby('puncta').agg(lambda x:x.value_counts().index[0])
+    label_dict = df_label.to_dict()['cell']
     
-    return label_dict
+    # list puncta that do not map to any cells
+    df_label = df_label.reset_index()
+    zero_list = df_label['puncta'][df_label.cell==0].tolist()
+    
+    return label_dict, zero_list
 
 def find_peaks(data, n=5):
     """Finds local maxima. At a maximum, the value is max - min in a 
