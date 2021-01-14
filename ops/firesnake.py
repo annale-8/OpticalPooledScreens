@@ -718,13 +718,15 @@ class Snake():
 
         df_p = (Snake._extract_features(data_phenotype, filtered_puncta, wildcards, features_p)
             .rename(columns={'area': 'area_puncta'}))
-      
-        df_p['cell'] = df_p['label'].map(cell_label)
-        df_p = df_p[df_p.cell != 0]
-
-        print(df_p.shape[0])
         
-        return (df_p.rename(columns={'label': 'punct'}))
+        try:
+            df_p['cell'] = df_p['label'].map(cell_label)
+            df_p = df_p[df_p.cell != 0]
+            df_p.rename(columns={'label': 'punct'},inplace=True)
+        except:
+            df_p.insert(0,'cell',0)
+        
+        return df_p
 
     @staticmethod
     def _extract_phenotype_synapse_cell(data_phenotype, cells, wildcards):
