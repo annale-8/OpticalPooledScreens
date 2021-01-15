@@ -17,11 +17,12 @@ def correlate_channels(r, first, second):
     A = A[filt]
     B  = B[filt]
     try:
-        corr = (A - A.mean()) * (B - B.mean()) / (A.std() * B.std())
+        corr_array = (A - A.mean()) * (B - B.mean()) / (A.std() * B.std())
+        corr = corr_array.mean()
     except:
-        corr = np.nan
+        corr = float('Nan')
 
-    return corr.mean()
+    return corr
 
 
 def masked(r, index):
