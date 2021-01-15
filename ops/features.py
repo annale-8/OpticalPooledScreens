@@ -20,7 +20,7 @@ def correlate_channels(r, first, second):
         corr_array = (A - A.mean()) * (B - B.mean()) / (A.std() * B.std())
         corr = corr_array.mean()
     except:
-        corr = float('Nan')
+        corr = float('NaN')
 
     return corr
 
