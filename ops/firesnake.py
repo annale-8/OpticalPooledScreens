@@ -255,8 +255,24 @@ class Snake():
         return aligned
 
     @staticmethod
+    def _bin_image(data):
+
+        data = np.array(data)
+
+        if data.ndim == 4:
+            block_size = (1,1,2,2)
+        elif data.ndim == 3:
+            block_size = (1,2,2)
+        if data.ndim == 2:
+            block_size = (2,2)   
+
+        binned = skimage.measure.block_reduce(data, block_size=block_size, func=np.max)
+
+        return binned
+
+    @staticmethod
     def _merge_SBS(data, upsample_factor=2, window=2, cutoff=1,
-        align_within_cycle=True, keep_trailing=False, n=1, c1=False):
+        align_within_cycle=True, keep_trailing=False, n=1, c1=False, binning=False):
         """
         Fast-mode SBS: merge and align based on modified align_SBS (method=SBS_mean)
         Slow-mode SBS:
@@ -303,7 +319,12 @@ class Snake():
             remove_index = 0 # DAPI channel
             aligned = remove_channels(data, remove_index)
 
-        return aligned[0]
+        if binning:
+            sbs = skimage.measure.block_reduce(aligned, block_size=(1,1,2,2), func=np.max)
+        else: 
+            sbs = aligned
+        
+        return sbs[0]
 
 
     @staticmethod
@@ -312,6 +333,7 @@ class Snake():
         data. Expects data to have shape (CHANNEL, I, J).
         """
         data = np.array(data)
+        
         if data.ndim == 4:
             data = data[0]
 
