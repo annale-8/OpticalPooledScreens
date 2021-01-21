@@ -952,7 +952,13 @@ class Snake():
         df_1 = df_1.rename(columns={'tile':'site'})
         model = th.build_linear_model(alignment['rotation'],alignment['translation'])
         
-        return th.merge_sbs_phenotype(df_0,df_1,model,threshold=threshold)
+        try:
+            merged = th.merge_sbs_phenotype(df_0,df_1,model,threshold=threshold)
+        except:
+            # if info file is empty, return empty dataframe
+            merged = pd.DataFrame(columns=['well','tile','cell_0','i_0','j_0','site','cell_1', 'i_1', 'j_1', 'distance'])                   
+
+        return merged
 
     @staticmethod
     def add_method(class_, name, f):
