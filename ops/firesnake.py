@@ -215,7 +215,7 @@ class Snake():
             If list, calculate offsets for each channel to target separately 
             10/1/20 NOTE: current code does not accomodate for riders if multiple sources listed
         Riders - list of integers
-            Channels to be aligned to target using offset calculate from source
+            Channels to be aligned to target using offset calculated from source
         """
         
         data = np.array(files)
@@ -253,6 +253,34 @@ class Snake():
             aligned = remove_channels(aligned, source)
 
         return aligned
+
+    @staticmethod
+    def _merge_pheno(files,aligned_puncta,mode='binned'):
+        """
+        Merge semi-fast-mode phenotyping images
+        Expects files to be (CHANNEL, I, J) for DAPI, GFP, A750 -- 1480x1480
+        Expects aligned_puncta to be (CHANNEL, I, J) for A532, A594, A647 -- 2960x2960
+        Bin 2x2 if mode='cells' and upsize if mode='puncta'
+        """
+        
+        data = []
+        if mode == 'upsized':
+            for f in files:
+                data.append(scipy.ndimage.zoom(np.array(f), 2, order=0))
+            upsized = np.array(data)
+            aligned = np.array(aligned_puncta)
+            assert upsized.ndim == aligned.ndim
+            merged = np.concatenate([upsized,aligned],axis=0)
+
+        elif mode == 'binned':
+            binned = np.array(files)
+            aligned = np.array(aligned_puncta)
+            aligned_binned = skimage.measure.block_reduce(aligned, block_size=(1,2,2), func=np.max)
+            assert binned.ndim == aligned.ndim
+            merged = np.concatenate([binned,aligned_binned],axis=0)
+
+        return merged
+
 
     @staticmethod
     def _bin_image(data):
