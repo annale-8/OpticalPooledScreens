@@ -99,7 +99,8 @@ def do_percentile_call(df_bases, cycles=1, channels=4, correction_only_in_cells=
         return Y,W
 
     if correction_by_cycle:
-        Y = np.empty(df_bases.pipe(len),dtype=int).reshape(-1,channels)
+        # this hasn't worked in practice very well, unclear why
+        Y = np.empty(df_bases.pipe(len),dtype=df_bases.dtypes['intensity']).reshape(-1,channels)
         for cycle, (_, df_cycle) in enumerate(df_bases.groupby('cycle')):
             Y[cycle::cycles,:],_ = correction(df_cycle,channels,percentile,correction_only_in_cells)
     else:

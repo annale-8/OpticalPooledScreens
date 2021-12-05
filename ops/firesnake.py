@@ -593,8 +593,8 @@ class Snake():
             data = remove_channels(data, remove_index)
 
         leading_dims = tuple(range(0, data.ndim - 2))
-        consensus = np.std(data, axis=leading_dims) # this is for 1-cycle data
-        # consensus = np.std(data, axis=0).mean(axis=0) # this is for multi-cycle data
+        # consensus = np.std(data, axis=leading_dims) # this is for 1-cycle data
+        consensus = np.std(data, axis=0).mean(axis=0) # this is for multi-cycle data
 
 
         return consensus
@@ -663,7 +663,7 @@ class Snake():
         return df_bases
 
     @staticmethod
-    def _call_reads(df_bases, peaks=None, correction_only_in_cells=True):
+    def _call_reads(df_bases, peaks=None, correction_only_in_cells=True, subtract_background=False):
         """Median correction performed independently for each tile.
         Use the `correction_only_in_cells` flag to specify if correction
         is based on reads within cells, or all reads.
@@ -673,14 +673,15 @@ class Snake():
         if correction_only_in_cells:
             if len(df_bases.query('cell > 0')) == 0:
                 return
-        
+        if subtract_background:
+            df_bases['intensity'] - df_bases.groupby(['well','tile','cell','read','channel'])['intensity'].transform(min)
+            # df_bases['intensity'] = (df_bases['intensity'] - df_bases.groupby(['well','tile','cycle','channel'])['intensity'].transform(lambda x: x.quantile(0.25))).clip(0)
         cycles = len(set(df_bases['cycle']))
         channels = len(set(df_bases['channel']))
 
         df_reads = (df_bases
             .pipe(ops.in_situ.clean_up_bases)
-            .pipe(ops.in_situ.do_median_call, cycles, channels=channels,
-                correction_only_in_cells=correction_only_in_cells)
+            .pipe(ops.in_situ.do_median_call, cycles, channels=channels, correction_only_in_cells=correction_only_in_cells)
             )
 
         if peaks is not None:
@@ -690,7 +691,8 @@ class Snake():
         return df_reads
 
     @staticmethod
-    def _call_reads_percentiles(df_bases, peaks=None, correction_only_in_cells=True, imaging_order='GTAC', percentile=98, correction_by_cycle=False):
+    def _call_reads_percentiles(df_bases, peaks=None, correction_only_in_cells=True, imaging_order='GTAC', percentile=98, correction_by_cycle=False,
+        subtract_channel_min=False):
         # print(imaging_order)
         """Median correction performed independently for each tile.
         Use the `correction_only_in_cells` flag to specify if correction
@@ -701,7 +703,8 @@ class Snake():
         if correction_only_in_cells:
             if len(df_bases.query('cell > 0')) == 0:
                 return
-
+        if subtract_channel_min:
+            df_bases['intensity'] = df_bases['intensity'] - df_bases.groupby(['well','tile','cell','read','channel'])['intensity'].transform('min')
 
         cycles = len(set(df_bases['cycle']))
         channels = len(set(df_bases['channel']))
