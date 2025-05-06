@@ -1,6 +1,9 @@
 ## Optical Pooled Screens
 
-Analysis resources for the publication *Pooled genetic perturbation screens with image-based phenotypes*. This is an updated and expanded version of the repository for the original 2019 publication [*Optical pooled screens in human cells*](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6886477/), available [here](https://github.com/feldman4/OpticalPooledScreens_2019).
+This repository contains code and computational tools related to the publication, High-content image-based pooled screens reveal regulators of synaptogenesis.
+Raw image data are available on Google Cloud at gs://opspublic-east1/SynaptogenesisOpticalPooledScreen.
+
+For new projects using optical pooled screens, it is highly recommended to use the Github repository accompanying our Nature Protocols paper, Pooled genetic perturbation screens with image-based phenotypes: https://github.com/feldman4/OpticalPooledScreens.
 
 ### Installation (OSX)
 
