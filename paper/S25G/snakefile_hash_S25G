@@ -1,0 +1,124 @@
+import snakemake
+import ops.firesnake
+from ops.firesnake import Snake
+import ops.io
+# from ops.imports import *
+# import ops.triangle_hash as th
+# import pandas as pd
+
+# EXPT = '20200815_6W-S23'
+# PLATES = ['20200815_6W-S23E']
+
+CYCLESpheno = ['c0-SBS-0']
+CYCLES = ['c{cycle}-SBS-{cycle}'.format(cycle=c) for c in range(1, 10)]
+CYCLESslow = ['c1-SBS-1']
+CHANNELpheno = ['DAPI_2p-20ms','GFP_10p','AF750_nopfs_30p','AF532_30p_nobin','A594_30p_nobin','CY5_30p-70ms_nobin']
+CHANNELfast = ['CY3_30p_545','A594_30p','CY5_30p','CY7_30p']
+CHANNELslow = ['DAPI_2p-20ms,CY3_30p_545,A594_30p,CY5_30p,CY7_30p']
+
+ROWS = ['A','B']
+COLUMNS = list(range(1,4))
+WELLS = [row+str(column) for row in ROWS for column in COLUMNS]
+TILES_20x = list(range(1281))
+TILES_10x = list(range(300))
+
+det_range = (0.24,0.27)
+initial_sites = [(47,9),(108,14),(288,65),(448,108),(581,131),(747,170),(911,212),(1075,257),(1225,294)]
+# initial_sites = 8
+# WELLS,TILES,SITES = df_align[['well','tile','site']].values.T
+
+rule all:
+    input:
+        # request individual files or list of files
+        expand('alignment/ph_info_{well}.hdf',well=WELLS),
+        expand('alignment/sbs_info_{well}.hdf',well=WELLS),
+        expand('alignment/det_range_{well}.txt',well=WELLS),
+        'alignment/fast_alignment_all.hdf'
+
+rule fast_alignment:
+    priority: -1
+    input:
+        'pheno_input/metadata/20X_{cycle}_{{well}}_Channel-{channel}.metadata.pkl'.format(cycle=CYCLESpheno[0],channel=CHANNELpheno[0]),
+        expand('info/pheno/20X_{{well}}_Site-{tile}.phenotype_info.csv',tile=TILES_20x),
+        'sbs_input/metadata/10X_{cycle}_{{well}}_Channel-{channel}.metadata.pkl'.format(cycle=CYCLESslow[0],channel=CHANNELslow[0]),
+        expand('info/sbs/10X_{{well}}_Site-{site}.sbs_info.csv',site=TILES_10x)
+    output:
+        'alignment/ph_info_{well}.hdf',
+        'alignment/sbs_info_{well}.hdf',
+        'alignment/fast_alignment_{well}.hdf',
+        'alignment/det_range_{well}.txt'
+    threads: 96
+    run:
+        import ops.utils
+        import ops.triangle_hash as th
+        from joblib import Parallel,delayed
+        import pandas as pd
+
+        f_ph_metadata = input[0]
+        f_ph_info = input[1:len(TILES_20x)+1]
+        f_sbs_metadata = input[len(TILES_20x)+1]
+        f_sbs_info = input[(len(TILES_20x)+2):]
+
+        def get_file(f):
+            try:
+                return pd.read_csv(f)
+            except pd.errors.EmptyDataError:
+                pass
+
+        arr_ph = Parallel(n_jobs=threads)(delayed(get_file)(file) for file in f_ph_info)
+        df_ph_info = pd.concat(arr_ph)
+        df_ph_info.to_hdf(output[0],'x',mode='w')
+        df_ph_info = df_ph_info[df_ph_info.groupby(['tile'])['tile'].transform('size') > 4]
+
+        arr_sbs = Parallel(n_jobs=threads)(delayed(get_file)(file) for file in f_sbs_info)
+        df_sbs_info = pd.concat(arr_sbs)
+        df_sbs_info.to_hdf(output[1],'x',mode='w')
+        df_sbs_info = df_sbs_info[df_sbs_info.groupby(['tile'])['tile'].transform('size') > 4]
+
+        df_ph_info_hash = (df_ph_info
+            .pipe(ops.utils.gb_apply_parallel,['tile'],th.find_triangles,n_jobs=threads,tqdn=False)
+            )
+        df_sbs_info_hash = (df_sbs_info
+            .pipe(ops.utils.gb_apply_parallel,['tile'],th.find_triangles,n_jobs=threads,tqdn=False)
+            .rename(columns={'tile':'site'})
+            )
+
+        df_ph_xy = (pd.read_pickle(f_ph_metadata)
+            .rename(columns={'field_of_view':'tile'})
+            .set_index('tile')
+            [['x','y']]
+            )
+
+        df_sbs_xy = (pd.read_pickle(f_sbs_metadata)
+            .rename(columns={'field_of_view':'tile'})
+            .set_index('tile')
+            [['x', 'y']]
+           )
+
+        df_align, d0, d1 = th.multistep_alignment(
+            df_ph_info_hash,
+            df_sbs_info_hash,
+            df_ph_xy,
+            df_sbs_xy,
+            det_range=det_range,
+            initial_sites=initial_sites,
+            tqdn=False,
+            n_jobs=threads
+            )
+
+        df_align.assign(well=wildcards.well).to_hdf(output[2],'x',mode='w')
+
+        with open(output[3], 'w') as f:
+            f.write('{} {}'.format(d0, d1))
+
+rule combine_alignment:
+    input:
+        expand('alignment/fast_alignment_{well}.hdf',well=WELLS)
+    output:
+        'alignment/fast_alignment_all.hdf'
+    run:
+        import pandas as pd
+        df_alignment = pd.concat([pd.read_hdf(f).assign(well=f[-6:-4]) for f in input])
+        df_alignment.to_hdf(output[0],'x',mode='w')
+
+

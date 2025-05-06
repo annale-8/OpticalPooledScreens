@@ -1,0 +1,170 @@
+import snakemake
+import ops.firesnake
+from ops.firesnake import Snake
+import ops.io
+
+BASES = 'GTAC'
+CYCLES = ['c{cycle}-SBS-{cycle}'.format(cycle=c) for c in range(1, 10)]
+CYCLESfast = ['c{cycle}-SBS-{cycle}'.format(cycle=c) for c in range(2, 10)]
+CYCLESslow = ['c1-SBS-1']
+CHANNELfast = ['CY3_30p_545','A594_30p','CY5_30p','CY7_30p']
+CHANNELslow = ['DAPI_2p-20ms,CY3_30p_545,A594_30p,CY5_30p,CY7_30p']
+
+ROWS = ['A','B']
+COLUMNS = list(range(1,4))
+WELLS = [row+str(column) for row in ROWS for column in COLUMNS]
+TILES = list(range(300))
+
+THRESHOLD_READS = 170 # threshold on peak value
+THRESHOLD_DAPI = 1700 # threshold for segmenting nuclei
+THRESHOLD_CELL = 1400 # threshold for segmenting cells
+NUCLEUS_AREA = 0.25*150, 0.25*1000
+
+
+# .tif file metadata recognized by ImageJ
+DISPLAY_RANGES=((500, 70000), 
+                (100, 70000), 
+                (100, 70000), 
+                (100, 70000), 
+                (100, 70000))
+LUTS = ops.io.GRAY, ops.io.GREEN, ops.io.RED, ops.io.MAGENTA, ops.io.CYAN
+
+rule all:
+    input:
+        # request individual files or list of files
+        expand('process/sbs/10X_{well}_Site-{tile}.cells.csv', well=WELLS, tile=TILES),
+        expand('info/sbs/10X_{well}_Site-{tile}.sbs_info.csv', well=WELLS, tile=TILES)
+        
+
+rule bin_c1:
+    priority: -1
+    input: 
+        'sbs_input/preprocess/10X_{cycle}/10X_{cycle}_{{well}}_Site-{{tile}}_Channel-{ch}.tif'.format(cycle=CYCLESslow[0], ch=CHANNELslow[0])
+    output:
+        temp('process/sbs/10X_{well}_Site-{tile}.binned.tif')
+    run:
+        Snake.bin_image(output=output, data=input)
+
+rule clean_c1:
+    priority: -1
+    input:
+        'sbs_input/preprocess/10X_{cycle}/10X_{cycle}_{{well}}_Site-{{tile}}_Channel-{ch}.tif'.format(cycle=CYCLESslow[0], ch=CHANNELslow[0])
+    output:
+        temp('process/sbs/10X_c1-SBS-1_{well}_Site-{tile}.tif')
+    run:
+        Snake.merge_SBS(output=output, data=input, c1=True, binning=True)
+
+rule merge_SBS:
+    priority: -1
+    input:
+        expand('sbs_input/preprocess/10X_{{CYCLESfast}}/10X_{{CYCLESfast}}_{{well}}_Site-{{tile}}_Channel-{chs}.tif', chs=CHANNELfast)
+    output:
+        temp('process/sbs/10X_{CYCLESfast}_{well}_Site-{tile}.tif')
+    run:
+        Snake.merge_SBS(output=output, data=input, c1=False, binning=True)
+
+rule segment_nuclei:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.binned.tif'
+    output:
+        'process/sbs/10X_{well}_Site-{tile}.nuclei.tif'
+    run:
+        Snake.segment_nuclei(output=output, data=input, 
+            threshold=THRESHOLD_DAPI, area_min=NUCLEUS_AREA[0], area_max=NUCLEUS_AREA[1],
+            display_ranges=DISPLAY_RANGES, luts=LUTS)
+
+rule segment_cells:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.binned.tif',
+        'process/sbs/10X_{well}_Site-{tile}.nuclei.tif'
+    output:
+        'process/sbs/10X_{well}_Site-{tile}.cells.tif'
+    run:
+        Snake.segment_cells(output=output, data=input[0], nuclei=input[1], threshold=THRESHOLD_CELL,
+            display_ranges=DISPLAY_RANGES, luts=LUTS)
+
+rule extract_phenotype_minimal_10x:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.binned.tif',
+        'process/sbs/10X_{well}_Site-{tile}.nuclei.tif'
+    output:
+        'info/sbs/10X_{well}_Site-{tile}.sbs_info.csv'
+    run:
+        Snake.extract_phenotype_minimal(output=output, data_phenotype=input[0],
+            nuclei=input[1], wildcards=dict(wildcards))
+
+rule align:
+    input:
+        expand('process/sbs/10X_{c}_{{well}}_Site-{{tile}}.tif', c=CYCLES)
+    output:
+        'process/sbs/10X_{well}_Site-{tile}.aligned.tif'
+    run:
+        Snake.align_SBS(output=output, data=input, window=3,
+            display_ranges=DISPLAY_RANGES[1:], luts=LUTS[1:])
+
+rule transform_LoG:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.aligned.tif'
+    output:
+        'process/sbs/10X_{well}_Site-{tile}.log.tif'
+    run:
+        Snake.transform_log(output=output, data=input, sigma=1.2, skip_index=None,
+            display_ranges=DISPLAY_RANGES[1:], luts=LUTS[1:])
+
+rule compute_std:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.log.tif'
+    output:
+        temp('process/sbs/10X_{well}_Site-{tile}.std.tif')
+    run:
+        Snake.compute_std(output=output, data=input[0], remove_index=None)
+
+rule find_peaks:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.std.tif'
+    output:
+        temp('process/sbs/10X_{well}_Site-{tile}.peaks.tif')
+    run:
+        Snake.find_peaks(output=output, data=input[0], width=3) 
+
+rule max_filter:
+    """Dilates sequencing channels to compensate for single-pixel alignment error.
+    """
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.log.tif'
+    output:
+        temp('process/sbs/10X_{well}_Site-{tile}.maxed.tif')
+    run:
+        Snake.max_filter(output=output, data=input[0], width=3,
+            remove_index=None, display_ranges=DISPLAY_RANGES[1:], luts=LUTS[1:]) 
+
+rule extract_bases:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.peaks.tif',
+        'process/sbs/10X_{well}_Site-{tile}.maxed.tif',
+        'process/sbs/10X_{well}_Site-{tile}.cells.tif'
+    output:
+        'process/sbs/10X_{well}_Site-{tile}.bases.csv'
+    run:
+        Snake.extract_bases(output=output, peaks=input[0], maxed=input[1], 
+            cells=input[2], threshold_peaks=THRESHOLD_READS, bases=BASES, wildcards=dict(wildcards)) 
+
+rule call_reads:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.bases.csv',
+        'process/sbs/10X_{well}_Site-{tile}.peaks.tif'
+    output:
+        'process/sbs/10X_{well}_Site-{tile}.reads.csv'
+    run:
+        Snake.call_reads_percentiles(output=output, df_bases=input[0], peaks=input[1],
+            percentile=95, correction_by_cycle=True)
+
+rule call_cells:
+    input:
+        'process/sbs/10X_{well}_Site-{tile}.reads.csv'
+    output:
+        'process/sbs/10X_{well}_Site-{tile}.cells.csv'
+    run:
+        Snake.call_cells(output=output, df_reads=input[0])
+
+

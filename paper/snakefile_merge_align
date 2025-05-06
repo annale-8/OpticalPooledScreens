@@ -1,0 +1,64 @@
+import snakemake
+import ops.firesnake
+from ops.firesnake import Snake
+# import ops.io
+# from ops.imports import *
+# import ops.triangle_hash as th
+import pandas as pd
+
+det_range = (0.24,0.26)
+score = 0.1
+gate = '{0} <= determinant <= {1} & score > {2}'.format(*det_range,score)
+
+df_align = pd.read_hdf('alignment/fast_alignment_all.hdf').query(gate)
+df_align = df_align.astype({"tile": int, "site": int})
+
+# PLATES = ['20200815_6W-S23E']
+WELLS,TILES_PH,SITES_SBS = df_align[['well','tile','site']].values.T
+
+rule all:
+    input:
+        # request individual files or list of files
+        expand('alignment/merged/{well}_Tile-{tile}_Site-{site}.merge.csv', zip, well=WELLS, tile=TILES_PH,site=SITES_SBS),
+        'alignment/aligned.hdf'
+
+rule merge:
+    input:
+        'info/pheno/20X_{well}_Site-{tile}.phenotype_info.csv',
+        'info/sbs/10X_{well}_Site-{site}.sbs_info.csv'
+    output:
+        'alignment/merged/{well}_Tile-{tile}_Site-{site}.merge.csv'
+    run:
+        Snake.merge_triangle_hash(output=output,df_0=input[0],df_1=input[1],
+            alignment=df_align.query('well==@wildcards.well & tile==@wildcards.tile & site==@wildcards.site').iloc[0])
+        # well,tile,site = wildcards.well, wildcards.tile, wildcards.site
+        # alignment = df_align.query('well==@well & tile==@tile & site==@site').iloc[0]
+
+        # df_0 = pd.read_csv(input[0])
+        # df_1 = pd.read_csv(input[1]).rename(columns={'tile':'site'})
+
+        # model = th.build_linear_model(alignment['rotation'],alignment['translation'])
+
+        # th.merge_sbs_phenotype(df_0,df_1,model).to_csv(str(output))
+
+rule combine:
+    input:
+        expand('alignment/merged/{well}_Tile-{tile}_Site-{site}.merge.csv', zip, well=WELLS, tile=TILES_PH,site=SITES_SBS)
+    output:
+        'alignment/aligned.hdf'
+    run:
+        def merge_csv(files):
+            """Reads .hdf files, concatenates them into a pandas df, and saves as merged .h5 file
+            """
+            arr = []
+            for f in files:
+                try:
+                    arr += [pd.read_csv(f)]
+                except pd.errors.EmptyDataError:
+                    pass
+            df = pd.concat(arr)
+
+            return df
+
+        df = merge_csv(input)
+        df.to_hdf(output[0], 'x', mode='w')

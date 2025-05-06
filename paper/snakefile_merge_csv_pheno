@@ -1,0 +1,108 @@
+import snakemake
+import ops.firesnake
+from ops.firesnake import Snake
+import ops.io
+import pandas as pd
+
+# BASES = 'GTAC'
+# EXPT = '20200815_6W-S23'
+# PLATES = ['20200815_6W-S23E']
+# CYCLES = ['c{cycle}-SBS-{cycle}'.format(cycle=c) for c in range(1, 10)]
+# CYCLESslow = ['c1-SBS-1']
+# CHANNELslow = ['DAPI,CY3_30p_545,A594_30p,CY5_30p,CY7_30p']
+# CHANNELpheno = ['DAPI','GFP_20p','AF750_30p','AF532_30p','A594_30p','CY5_20p']
+# CHANNELfast = ['CY3_30p_545','A594_30p','CY5_30p','CY7_30p']
+# CHANNELslow = ['DAPI,CY3_30p_545,A594_30p,CY5_30p,CY7_30p']
+
+ROWS = ['A','B']
+COLUMNS = list(range(1,4))
+WELLS = [row+str(column) for row in ROWS for column in COLUMNS]
+TILES_20x = list(range(1281))
+TILES_10x = list(range(300))
+
+def merge_csv(files):
+    """Reads .hdf files, concatenates them into a pandas df, and saves as merged .h5 file
+    """
+    arr = []
+    for f in files:
+        try:
+            arr += [pd.read_csv(f)]
+        except pd.errors.EmptyDataError:
+            pass
+    df = pd.concat(arr)
+
+    return df
+
+def merge_hdf(files):
+    """Reads .hdf files, concatenates them into a pandas df, and saves as merged .h5 file
+    """
+    arr = []
+    for f in files:
+        try:
+            arr += [pd.read_hdf(f)]
+        except pd.errors.EmptyDataError:
+            pass
+    df = pd.concat(arr)
+
+    return df
+
+rule all:
+    input:
+        # request individual files or list of files
+        'merged/pheno.hdf',
+        'merged/a532.hdf',
+        'merged/a594.hdf',
+        'merged/a647.hdf',
+        'merged/a647.hdf',
+        'merged/puncta.hdf'
+
+rule merge_pheno:
+	input: 
+		expand('process/pheno/20X_{well}_Site-{tile}.pheno_cells.csv', well=WELLS, tile=TILES_20x)
+	output:
+		'merged/pheno.hdf'
+	run:
+	    df = merge_csv(input)
+	    df.to_hdf(output[0], 'x', mode='w')
+
+rule merge_a532:
+	input: 
+		expand('process/pheno/20X_{well}_Site-{tile}.a532.csv', well=WELLS, tile=TILES_20x)
+	output:
+		'merged/a532.hdf'
+	run:
+	    df = merge_csv(input)
+	    df['channel'] = 'a532'
+	    df.to_hdf(output[0], 'x', mode='w')
+
+rule merge_a594:
+	input: 
+		expand('process/pheno/20X_{well}_Site-{tile}.a594.csv', well=WELLS, tile=TILES_20x)
+	output:
+		'merged/a594.hdf'
+	run:
+	    df = merge_csv(input)
+	    df['channel'] = 'a594'
+	    df.to_hdf(output[0], 'x', mode='w')
+
+rule merge_a647:
+	input: 
+		expand('process/pheno/20X_{well}_Site-{tile}.a647.csv', well=WELLS, tile=TILES_20x)
+	output:
+		'merged/a647.hdf'
+	run:
+	    df = merge_csv(input)
+	    df['channel'] = 'a647'
+	    df.to_hdf(output[0], 'x', mode='w')
+
+rule merge_puncta:
+	input: 
+		['merged/a532.hdf',
+		'merged/a594.hdf',
+		'merged/a647.hdf']
+	output:
+		'merged/puncta.hdf'
+	run:
+	    df = merge_hdf(input)
+	    df.to_hdf(output[0], 'x', mode='w')
+

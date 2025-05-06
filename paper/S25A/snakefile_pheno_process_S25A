@@ -1,0 +1,188 @@
+import snakemake
+import ops.firesnake
+from ops.firesnake import Snake
+import ops.io
+import scipy
+from ops.io import read_stack as read
+import skimage.segmentation
+
+EXPT = '20201113_6W-S25'
+
+CYCLESpheno = ['c0-SBS-0']
+CHANNELpheno = ['DAPI_2p-20ms','GFP_10p','AF750_nopfs_30p','AF532_30p_nobin','A594_30p_nobin','CY5_30p-70ms_nobin']
+
+ROWS = ['A','B']
+COLUMNS = list(range(1,4))
+WELLS = [row+str(column) for row in ROWS for column in COLUMNS]
+TILES = list(range(1281))
+
+THRESHOLD_DAPI = 10000 
+NUCLEUS_AREA = 0.5*150, 0.5*2000
+NUCLEUS_RADIUS = 30
+
+THRESHOLD_CELL = 1000
+HEK_AREA = 200
+
+LOG_SIGMA = 1
+PUNCTA_RADIUS = 1
+PUNCTA_AREA = 1, 200
+THRESHOLD_A532 = 550
+THRESHOLD_A594 = 300
+THRESHOLD_A647 = 300
+
+
+# .tif file metadata recognized by ImageJ
+DISPLAY_RANGES=((200, 200000), 
+                (100, 200000), 
+                (100, 200000), 
+                (100, 200000), 
+                (100, 200000),
+                (100, 200000))
+LUTS = ops.io.GRAY, ops.io.GREEN, ops.io.CYAN, ops.io.YELLOW, ops.io.RED, ops.io.MAGENTA 
+
+rule all:
+    input:
+        # request individual files or list of files
+        expand('process/pheno/20X_{well}_Site-{tile}.pheno_cells.csv', well=WELLS, tile=TILES),
+        expand('process/pheno/20X_{well}_Site-{tile}.a532.csv', well=WELLS, tile=TILES),
+        expand('process/pheno/20X_{well}_Site-{tile}.a594.csv', well=WELLS, tile=TILES),
+        expand('process/pheno/20X_{well}_Site-{tile}.a647.csv', well=WELLS, tile=TILES),
+        expand('info/pheno/20X_{well}_Site-{tile}.phenotype_info.csv', well=WELLS, tile=TILES)
+
+rule segment_nuclei_channel:
+    input:
+        'pheno_input/preprocess/20X_{cycle}/20X_{cycle}_{{well}}_Site-{{tile}}_Channel-{dapi}.tif'.format(cycle=CYCLESpheno[0], dapi=CHANNELpheno[0])
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.nuclei.tif'
+    run:
+        Snake.segment_nuclei_channel(output=output, data=input, threshold=THRESHOLD_DAPI, 
+            channel=0, radius=NUCLEUS_RADIUS, area_min=NUCLEUS_AREA[0], area_max=NUCLEUS_AREA[1])
+
+rule extract_phenotype_minimal:
+    input:
+        'pheno_input/preprocess/20X_{cycle}/20X_{cycle}_{{well}}_Site-{{tile}}_Channel-{dapi}.tif'.format(cycle=CYCLESpheno[0], dapi=CHANNELpheno[0]),
+        'process/pheno/20X_{well}_Site-{tile}.nuclei.tif'
+    output:
+        'info/pheno/20X_{well}_Site-{tile}.phenotype_info.csv'
+    run:
+        Snake.extract_phenotype_minimal(output=output, data_phenotype=input[0],
+            nuclei=input[1], wildcards=dict(wildcards))
+
+rule segment_HEKs:
+    input:
+        'pheno_input/preprocess/20X_{cycle}/20X_{cycle}_{{well}}_Site-{{tile}}_Channel-{gfp}.tif'.format(cycle=CYCLESpheno[0], gfp=CHANNELpheno[1]),
+        'process/pheno/20X_{well}_Site-{tile}.nuclei.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.cells.tif'
+    run:
+        Snake.segment_HEKs(output=output, data=input[0], nuclei=input[1], 
+            threshold=THRESHOLD_CELL, area_min=HEK_AREA, channel=1, wildcards=dict(wildcards))
+
+rule align_puncta:
+    input:
+        expand('pheno_input/preprocess/20X_{cycle}/20X_{cycle}_{{well}}_Site-{{tile}}_Channel-{chp}.tif', cycle=CYCLESpheno[0], chp=CHANNELpheno[3:])
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.aligned_puncta.tif'
+    run:
+        Snake.align_phenotype_channels(output=output, files=input, target=0, source=[1,2])
+
+rule transform_LoG:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.aligned_puncta.tif'
+    output:
+        temp('process/pheno/20X_{well}_Site-{tile}.log.tif')
+    run:
+        Snake.transform_log(output=output, data=input, sigma=LOG_SIGMA, display_ranges=DISPLAY_RANGES, luts=LUTS)    
+
+rule segment_puncta_a532:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.log.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.a532.tif'
+    run:
+        Snake.segment_puncta(output=output, data=input, threshold=THRESHOLD_A532, 
+            channel=0, radius=PUNCTA_RADIUS, area_min=PUNCTA_AREA[0], area_max=PUNCTA_AREA[1])
+
+rule segment_puncta_a594:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.log.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.a594.tif'
+    run:
+        Snake.segment_puncta(output=output, data=input, threshold=THRESHOLD_A594, 
+            channel=1, radius=PUNCTA_RADIUS, area_min=PUNCTA_AREA[0], area_max=PUNCTA_AREA[1])
+
+rule segment_puncta_a647:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.log.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.a647.tif'
+    run:
+        Snake.segment_puncta(output=output, data=input, threshold=THRESHOLD_A647, 
+            channel=2, radius=PUNCTA_RADIUS, area_min=PUNCTA_AREA[0], area_max=PUNCTA_AREA[1])
+
+rule bin_merge:
+    input:
+        expand('pheno_input/preprocess/20X_{cycle}/20X_{cycle}_{{well}}_Site-{{tile}}_Channel-{ch}.tif', cycle=CYCLESpheno[0], ch=CHANNELpheno[:3]),
+        'process/pheno/20X_{well}_Site-{tile}.aligned_puncta.tif',
+    output:
+        temp('process/pheno/20X_{well}_Site-{tile}.binned.tif')
+    run:
+        Snake.merge_pheno(output=output, files=input[0:3], aligned_puncta=input[3], mode='binned')
+
+rule upsize_merge:
+    input:
+        expand('pheno_input/preprocess/20X_{cycle}/20X_{cycle}_{{well}}_Site-{{tile}}_Channel-{ch}.tif', cycle=CYCLESpheno[0], ch=CHANNELpheno[:3]),
+        'process/pheno/20X_{well}_Site-{tile}.aligned_puncta.tif',
+    output:
+        temp('process/pheno/20X_{well}_Site-{tile}.upsized.tif')
+    run:
+        Snake.merge_pheno(output=output, files=input[0:3], aligned_puncta=input[3], mode='upsized')
+
+rule extract_phenotype_synapse_cell:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.binned.tif',
+        'process/cells/20X_{well}_Site-{tile}.cells.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.pheno_cells.csv'
+    run:
+        Snake.extract_phenotype_synapse_cell(output=output, data_phenotype=input[0], cells=input[1], wildcards=dict(wildcards))
+
+rule extract_phenotype_a532:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.upsized.tif',
+        'process/pheno/20X_{well}_Site-{tile}.a532.tif',
+        'process/cells/20X_{well}_Site-{tile}.cells.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.a532.csv'
+    run:
+        cells = scipy.ndimage.zoom(read(input[2]), 2, order=0)
+
+        Snake.extract_phenotype_synapse_puncta(output=output, data_phenotype=input[0], puncta=input[1], 
+            cells=cells, wildcards=dict(wildcards))
+
+rule extract_phenotype_a594:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.upsized.tif',
+        'process/pheno/20X_{well}_Site-{tile}.a594.tif',
+        'process/cells/20X_{well}_Site-{tile}.cells.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.a594.csv'
+    run:
+        cells = scipy.ndimage.zoom(read(input[2]), 2, order=0)
+
+        Snake.extract_phenotype_synapse_puncta(output=output, data_phenotype=input[0], puncta=input[1], 
+            cells=cells, wildcards=dict(wildcards))
+
+rule extract_phenotype_a647:
+    input:
+        'process/pheno/20X_{well}_Site-{tile}.upsized.tif',
+        'process/pheno/20X_{well}_Site-{tile}.a647.tif',
+        'process/cells/20X_{well}_Site-{tile}.cells.tif'
+    output:
+        'process/pheno/20X_{well}_Site-{tile}.a647.csv'
+    run:
+        cells = scipy.ndimage.zoom(read(input[2]), 2, order=0)
+
+        Snake.extract_phenotype_synapse_puncta(output=output, data_phenotype=input[0], puncta=input[1], 
+            cells=cells, wildcards=dict(wildcards))

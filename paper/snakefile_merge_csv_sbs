@@ -1,0 +1,70 @@
+import snakemake
+import ops.firesnake
+from ops.firesnake import Snake
+import ops.io
+import pandas as pd
+
+# BASES = 'GTAC'
+# EXPT = '20200815_6W-S23'
+# PLATES = ['20200815_6W-S23E']
+# CYCLES = ['c{cycle}-SBS-{cycle}'.format(cycle=c) for c in range(1, 10)]
+# CYCLESslow = ['c1-SBS-1']
+# CHANNELslow = ['DAPI,CY3_30p_545,A594_30p,CY5_30p,CY7_30p']
+# CHANNELpheno = ['DAPI','GFP_20p','AF750_30p','AF532_30p','A594_30p','CY5_20p']
+# CHANNELfast = ['CY3_30p_545','A594_30p','CY5_30p','CY7_30p']
+# CHANNELslow = ['DAPI,CY3_30p_545,A594_30p,CY5_30p,CY7_30p']
+
+ROWS = ['A','B']
+COLUMNS = list(range(1,4))
+WELLS = [row+str(column) for row in ROWS for column in COLUMNS]
+TILES_20x = list(range(1281))
+TILES_10x = list(range(300))
+
+def merge_csv(files):
+    """Reads .hdf files, concatenates them into a pandas df, and saves as merged .h5 file
+    """
+    arr = []
+    for f in files:
+        try:
+            arr += [pd.read_csv(f)]
+        except pd.errors.EmptyDataError:
+            pass
+    df = pd.concat(arr)
+
+    return df
+
+rule all:
+    input:
+        # request individual files or list of files
+        'merged/bases.hdf',
+        'merged/reads.hdf',
+        'merged/cells.hdf'
+
+rule merge_bases:
+	input: 
+		expand('process/sbs/10X_{well}_Site-{tile}.bases.csv', well=WELLS, tile=TILES_10x)
+	output:
+		'merged/bases.hdf'
+	run:
+	    df = merge_csv(input)
+	    df.to_hdf(output[0], 'x', mode='w')
+
+rule merge_reads:
+	input: 
+		expand('process/sbs/10X_{well}_Site-{tile}.reads.csv', well=WELLS, tile=TILES_10x)
+	output:
+		'merged/reads.hdf'
+	run:
+	    df = merge_csv(input)
+	    df.to_hdf(output[0], 'x', mode='w')
+
+rule merge_cells:
+	input: 
+		expand('process/sbs/10X_{well}_Site-{tile}.cells.csv', well=WELLS, tile=TILES_10x)
+	output:
+		'merged/cells.hdf'
+	run:
+	    df = merge_csv(input)
+	    df.to_hdf(output[0], 'x', mode='w')
+
+
