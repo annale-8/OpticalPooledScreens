@@ -103,6 +103,45 @@ def plot_count_heatmap(df,tile='tile',shape='square',return_summary=False,**kwar
         return df_summary,axes
     return axes
 
+def plot_feature_heatmap(df,feature,tile='tile',shape='square',return_summary=False,**kwargs):
+    """Plot the count of items in df by well and tile in a convenient plate layout.
+    Useful for evaluating cell and read counts across wells. The colorbar label can 
+    be modified with:
+        axes[0,0].get_figure().axes[-1].set_ylabel(LABEL)
+    
+    Parameters
+    ----------
+    df : pandas DataFrame
+    tile : str, default 'tile'
+        The column name to be used to group tiles, as sometimes 'site' is used.
+    shape : str, default 'square'
+        Shape of subplot for each well used in plot_plate_heatmap
+    return_summary : boolean, default False
+        If true, returns df_summary
+    Other Parameters
+    ----------------
+    **kwargs
+        Keyword arguments passed to plot_plate_heatmap()
+    Returns
+    -------
+    df_summary : pandas DataFrame
+        DataFrame used for plotting
+        optional output, only returns if return_summary=True
+    axes : np.array of matplotlib Axes objects
+    """
+    df_summary = (df
+                  .groupby(['well',tile])
+                  .mean()[feature]
+                  .to_frame()
+                  .reset_index()
+                 )
+
+    axes = plot_plate_heatmap(df_summary,shape=shape,**kwargs)
+
+    if return_summary:
+        return df_summary,axes
+    return axes
+
 def plot_cell_mapping_heatmap(df_cells,df_sbs_info,mapping_to='one',shape='6W_sbs',return_summary=False,**kwargs):
     """Plot the mapping rate of cells by well and tile in a convenient plate layout.
     Parameters
@@ -133,8 +172,24 @@ def plot_cell_mapping_heatmap(df_cells,df_sbs_info,mapping_to='one',shape='6W_sb
         optional output, only returns if return_summary=True
     axes : np.array of matplotlib Axes objects
     """
+    # df = (df_sbs_info[['well','tile','cell']]
+    #        .merge(df_cells[['well','tile','cell','sgRNA_0','sgRNA_1']],
+    #               how='left',
+    #               on=['well','tile','cell']
+    #              )
+    #       )
+
+    # if mapping_to == 'one':
+    #     metric = 'fraction of cells mapping to 1 barcode'
+    #     df = df.assign(mapped = lambda x: x['sgRNA_0'].notna() & x['sgRNA_1'].isna())
+    # elif mapping_to == 'any':
+    #     metric = 'fraction of cells mapping to >=1 barcode'
+    #     df = df.assign(mapped = lambda x: x['sgRNA_0'].notna())
+    # else:
+    #     raise ValueError('mapping_to={} not implemented'.format(mapping_to))
+
     df = (df_sbs_info[['well','tile','cell']]
-           .merge(df_cells[['well','tile','cell','sgRNA_0','sgRNA_1']],
+           .merge(df_cells[['well','tile','cell','mapped_0','mapped_1']],
                   how='left',
                   on=['well','tile','cell']
                  )
@@ -142,12 +197,12 @@ def plot_cell_mapping_heatmap(df_cells,df_sbs_info,mapping_to='one',shape='6W_sb
 
     if mapping_to == 'one':
         metric = 'fraction of cells mapping to 1 barcode'
-        df = df.assign(mapped = lambda x: x['sgRNA_0'].notna() & x['sgRNA_1'].isna())
+        df = df.assign(mapped = lambda x: x[['mapped_0','mapped_1']].sum(axis=1)==1)
     elif mapping_to == 'any':
         metric = 'fraction of cells mapping to >=1 barcode'
-        df = df.assign(mapped = lambda x: x['sgRNA_0'].notna())
+        df = df.assign(mapped = lambda x: x[['mapped_0','mapped_1']].sum(axis=1)>0)
     else:
-        raise ValueError('mapping_to={} not implemented'.format(mapping_to))
+        raise ValueError(f'mapping_to={mapping_to} not implemented')
 
     df_summary = (df
                   .groupby(['well','tile'])
@@ -374,7 +429,7 @@ def plot_plate_heatmap(df,metric=None,shape='square',snake_sites=True,**kwargs):
         fig,axes = plt.subplots(4,6,figsize=(15,10))
     
     # define colorbar min and max    
-    cmin,cmax = (df[metric].min(),df[metric].max())
+    # cmin,cmax = (df[metric].min(),df[metric].max())
 
     # plot wells
     for ax,well in zip(axes.reshape(-1),wells):
@@ -386,7 +441,8 @@ def plot_plate_heatmap(df,metric=None,shape='square',snake_sites=True,**kwargs):
                     values[grid==tile] = df_well.loc[df_well.tile==tile,metric].values[0]
                 except:
                     values[grid==tile] = np.nan
-            plot = ax.imshow(values,vmin=cmin,vmax=cmax,**kwargs)
+            # plot = ax.imshow(values,vmin=cmin,vmax=cmax,**kwargs)
+            plot = ax.imshow(values,**kwargs)
         ax.set_title('Well {}'.format(well),fontsize=14)
         ax.axis('off')
     
